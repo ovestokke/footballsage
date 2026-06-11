@@ -1,0 +1,14 @@
+{
+  "source": "TV 2 VM Fantasy public static CSV",
+  "prices_url": "https://vmfantasy.tv2.no/images/TV%202%20VM%20Fantasy%20-%20priser.csv",
+  "imported_at": "2026-06-11T10:50:17.559154+00:00",
+  "player_count": 1249,
+  "team_count": 48,
+  "price_min": 3.5,
+  "price_max": 12.5,
+  "worldcup_matched": 1153,
+  "worldcup_unmatched": 96,
+  "etag": "\"8f79717959aabc64cbcd532254c28807\"",
+  "last_modified": "Thu, 11 Jun 2026 09:55:28 GMT",
+  "content_length": "40494"
+}

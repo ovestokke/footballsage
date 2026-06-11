@@ -1,0 +1,19 @@
+[project]
+name = "footballsage-api"
+version = "0.1.0"
+description = "FastAPI service for FootballSage fantasy logic"
+requires-python = ">=3.12"
+dependencies = [
+  "fastapi>=0.115",
+  "uvicorn[standard]>=0.32",
+]
+
+[project.optional-dependencies]
+dev = [
+  "httpx>=0.27",
+  "pytest>=8.3",
+]
+
+[tool.pytest.ini_options]
+pythonpath = ["."]
+testpaths = ["tests"]

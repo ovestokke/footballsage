@@ -1,0 +1,1 @@
+"""FootballSage API package."""

@@ -1,0 +1,3 @@
+[submodule "services/worldcup"]
+	path = services/worldcup
+	url = https://github.com/emrbli/worldcup.git
