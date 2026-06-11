@@ -47,6 +47,9 @@ type ImportCandidate = {
   confidence: number;
   match: ImportPlayerOption | null;
   alternatives: ImportPlayerOption[];
+  suggested_role: "starter" | "bench" | null;
+  is_captain: boolean;
+  is_vice_captain: boolean;
 };
 
 type ImportResponse = {
@@ -80,6 +83,9 @@ type TeamLineupPlayer = {
 };
 
 type TeamAnalysis = {
+  provider: string;
+  round: number;
+  budget: number;
   total_price: number;
   remaining_budget: number;
   expected_points: number;
@@ -93,6 +99,39 @@ type TeamAnalysis = {
   suggestions: [];
 };
 
+type SageAction = {
+  kind?: string;
+  title?: string;
+  reason?: string;
+  confidence?: string;
+  out_player_id?: string | null;
+  in_player_id?: string | null;
+  expected_points_delta?: number | null;
+  risks?: string[];
+};
+
+type SageContextPlayer = Pick<Player, "player_id" | "name">;
+
+type SageAdviceResponse = {
+  provider: string;
+  round: number;
+  llm_provider: string;
+  model: string;
+  context?: {
+    squad?: SageContextPlayer[];
+    transfer_candidates?: Record<string, SageContextPlayer[]>;
+  };
+  advice: {
+    summary: string;
+    priority_actions: SageAction[];
+    transfer_advice: SageAction[];
+    captain_advice: { captain_player_id?: string | null; vice_captain_player_id?: string | null; reason?: string } | null;
+    problems_found: Array<{ player_id?: string | null; problem?: string; severity?: string; evidence?: string }>;
+    risks: string[];
+    data_gaps: string[];
+  };
+};
+
 export default function Home() {
   const [scene, setScene] = useState<Scene>("import");
   const [teamText, setTeamText] = useState(sampleTeam);
@@ -101,6 +140,12 @@ export default function Home() {
   const [draftLineup, setDraftLineup] = useState<Record<string, Omit<TeamSelection, "player_id">>>({});
   const [confirmedSelections, setConfirmedSelections] = useState<TeamSelection[]>([]);
   const [analysis, setAnalysis] = useState<TeamAnalysis | null>(null);
+  const [sageQuestion, setSageQuestion] = useState("Hvilke bytter bør jeg gjøre før neste runde?");
+  const [sageFeedback, setSageFeedback] = useState("");
+  const [sageAdvice, setSageAdvice] = useState<SageAdviceResponse | null>(null);
+  const [selectedAdviceKeys, setSelectedAdviceKeys] = useState<Record<string, boolean>>({});
+  const [sageLoading, setSageLoading] = useState(false);
+  const [sageError, setSageError] = useState<string | null>(null);
   const [round, setRound] = useState(1);
   const [loading, setLoading] = useState(false);
   const [analyzing, setAnalyzing] = useState(false);
@@ -120,6 +165,8 @@ export default function Home() {
   const selectedDraftPlayers = useMemo(() => selectedDraftIds.map((playerId) => findDraftOption(importResult, playerId)).filter(Boolean) as ImportPlayerOption[], [importResult, selectedDraftIds]);
 
   useEffect(() => {
+    setSageAdvice(null);
+    setSageError(null);
     if (!confirmedSelections.length) {
       setAnalysis(null);
       return;
@@ -194,17 +241,60 @@ export default function Home() {
       if (!response.ok) throw new Error(payload.detail ?? "Import feilet");
 
       const nextSelections: Record<number, string> = {};
+      const nextLineup: Record<string, Omit<TeamSelection, "player_id">> = {};
       payload.candidates.forEach((candidate, index) => {
-        if (!isNoise(candidate) && candidate.match) nextSelections[index] = candidate.match.player_id;
+        if (!isNoise(candidate) && candidate.match) {
+          nextSelections[index] = candidate.match.player_id;
+          if (candidate.suggested_role || candidate.is_captain || candidate.is_vice_captain) {
+            nextLineup[candidate.match.player_id] = {
+              role: candidate.suggested_role ?? "starter",
+              is_captain: candidate.is_captain,
+              is_vice_captain: candidate.is_vice_captain,
+            };
+          }
+        }
       });
       setImportResult(payload);
       setDraftSelections(nextSelections);
-      setDraftLineup({});
+      setDraftLineup(nextLineup);
       setScene("verify");
     } catch (error) {
       setMessage(error instanceof Error ? error.message : "Import feilet");
     } finally {
       setLoading(false);
+    }
+  }
+
+  async function askSage(feedback?: string) {
+    if (!confirmedSelections.length || !analysis) return;
+    setSageLoading(true);
+    setSageError(null);
+    try {
+      const response = await fetch(`${apiBase}/sage/advice`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          provider: "tv2",
+          question: sageQuestion,
+          selections: confirmedSelections,
+          round,
+          budget: analysis.budget,
+          bank: Math.max(analysis.remaining_budget, 0),
+          free_transfers: 1,
+          risk_profile: "balanced",
+          previous_advice: feedback && sageAdvice ? selectedAdviceForFollowup(sageAdvice, selectedAdviceKeys) : undefined,
+          user_feedback: feedback || undefined,
+        }),
+      });
+      const payload: SageAdviceResponse & { detail?: string } = await response.json();
+      if (!response.ok) throw new Error(payload.detail ?? "Sage-råd feilet");
+      setSageAdvice(payload);
+      setSelectedAdviceKeys(defaultSelectedAdviceKeys(payload));
+      if (feedback) setSageFeedback("");
+    } catch (error) {
+      setSageError(error instanceof Error ? error.message : "Sage-råd feilet");
+    } finally {
+      setSageLoading(false);
     }
   }
 
@@ -229,11 +319,18 @@ export default function Home() {
     setScene("analysis");
   }
 
+  function navigateToScene(target: Scene) {
+    setScene(target);
+  }
+
   function startNewImport() {
     setScene("import");
     setImportResult(null);
     setDraftSelections({});
     setDraftLineup({});
+    setConfirmedSelections([]);
+    setAnalysis(null);
+    setSageAdvice(null);
     setMessage(null);
   }
 
@@ -268,10 +365,15 @@ export default function Home() {
       <header className="app-top compact">
         <div>
           <p className="eyebrow">FootballSage</p>
-          <h1>Sjekk om fantasy-laget er gyldig.</h1>
-          <p>Tre steg: importer laget, bekreft 15 spillere, og få en ren regelsjekk. Ingen mekaniske råd eller “optimalisering” før AI-rådgiveren kobles inn.</p>
+          <h1>Få AI-råd til neste fantasy-runde.</h1>
+          <p>Tre steg: importer laget, bekreft 15 spillere, og spør Sage om bytter, kaptein og problemer før neste runde.</p>
         </div>
-        <SceneSteps scene={scene} />
+        <SceneSteps
+          scene={scene}
+          canVerify={importResult !== null}
+          canAnalyze={confirmedSelections.length > 0}
+          onNavigate={navigateToScene}
+        />
       </header>
 
       {message && <p className="global-message">{message}</p>}
@@ -282,6 +384,14 @@ export default function Home() {
             <p className="eyebrow">Steg 1</p>
             <h2>Importer laget ditt</h2>
             <p>Bruk screenshot fra TV2 eller lim inn spillerlisten. Importen lager bare et forslag — eksisterende bekreftet lag endres ikke før du trykker “Bekreft lag”.</p>
+            {confirmedSelections.length > 0 && (
+              <p className="global-message" style={{ marginTop: 12 }}>Du har allerede et bekreftet lag med {confirmedSelections.length} spillere. Ny import overskriver kun forslaget — det bekreftede laget beholdes til du bekrefter på nytt.</p>
+            )}
+            {(importResult || confirmedSelections.length > 0) && (
+              <p style={{ marginTop: 8 }}>
+                <button className="secondary-button" onClick={startNewImport}>Nullstill alt</button>
+              </p>
+            )}
           </div>
 
           <div className="import-grid">
@@ -387,7 +497,7 @@ export default function Home() {
           )}
 
           <div className="scene-actions">
-            <button className="secondary-button" onClick={startNewImport}>Tilbake til import</button>
+            <button className="secondary-button" onClick={() => navigateToScene("import")}>Tilbake til import</button>
             <button disabled={!selectedDraftIsConfirmable} onClick={confirmSquad}>Bekreft lag</button>
           </div>
         </section>
@@ -398,7 +508,7 @@ export default function Home() {
           <div className="analysis-toolbar">
             <div>
               <p className="eyebrow">Steg 3</p>
-              <h2>Regelsjekk av laget</h2>
+              <h2>Sage-rådgiver</h2>
             </div>
             <label className="round-select">
               Runde
@@ -413,7 +523,8 @@ export default function Home() {
                 <option value={8}>Finale</option>
               </select>
             </label>
-            <button className="secondary-button" onClick={startNewImport}>Importer på nytt</button>
+            <button className="secondary-button" onClick={() => navigateToScene("verify")}>Endre lag</button>
+            <button className="secondary-button" onClick={startNewImport}>Start på nytt</button>
           </div>
 
           <section className="summary-grid" aria-label="Lagstatus">
@@ -436,8 +547,20 @@ export default function Home() {
 
           <section className="ai-workspace">
             <article className="panel ai-panel">
-              <PanelHeader title="AI-rådgiver" subtitle="Dette er hovedområdet. Når AI kobles inn, kommer anbefalinger her basert på laget over." />
-              <DecisionStack analysis={analysis} />
+              <PanelHeader title="AI-rådgiver" subtitle="Spør Sage om neste runde. LLM-en får laget, fixtures, xP og kandidatbytter fra appen." />
+              <DecisionStack
+                analysis={analysis}
+                question={sageQuestion}
+                setQuestion={setSageQuestion}
+                askSage={askSage}
+                sageFeedback={sageFeedback}
+                setSageFeedback={setSageFeedback}
+                sageAdvice={sageAdvice}
+                selectedAdviceKeys={selectedAdviceKeys}
+                setSelectedAdviceKeys={setSelectedAdviceKeys}
+                sageLoading={sageLoading}
+                sageError={sageError}
+              />
             </article>
           </section>
         </section>
@@ -446,11 +569,35 @@ export default function Home() {
   );
 }
 
-function SceneSteps({ scene }: { scene: Scene }) {
-  const steps: Array<[Scene, string]> = [["import", "Importer"], ["verify", "Bekreft"], ["analysis", "Sjekk"]];
+function SceneSteps({
+  scene,
+  canVerify,
+  canAnalyze,
+  onNavigate,
+}: {
+  scene: Scene;
+  canVerify: boolean;
+  canAnalyze: boolean;
+  onNavigate: (target: Scene) => void;
+}) {
+  const steps: Array<[Scene, string, boolean]> = [
+    ["import", "Importer", true],
+    ["verify", "Bekreft", canVerify],
+    ["analysis", "Sjekk", canAnalyze],
+  ];
   return (
     <ol className="scene-steps">
-      {steps.map(([key, label], index) => <li className={scene === key ? "active" : ""} key={key}>{index + 1}. {label}</li>)}
+      {steps.map(([key, label, unlocked]) => (
+        <li key={key}>
+          {unlocked ? (
+            <button className={scene === key ? "active" : ""} onClick={() => onNavigate(key)}>
+              {label}
+            </button>
+          ) : (
+            <span className={scene === key ? "active" : "muted"}>{label}</span>
+          )}
+        </li>
+      ))}
     </ol>
   );
 }
@@ -493,16 +640,184 @@ function SquadByPosition({ lineup, eliminatedIds }: { lineup: TeamLineupPlayer[]
   );
 }
 
-function DecisionStack({ analysis }: { analysis: TeamAnalysis | null }) {
+function DecisionStack({
+  analysis,
+  question,
+  setQuestion,
+  askSage,
+  sageFeedback,
+  setSageFeedback,
+  sageAdvice,
+  selectedAdviceKeys,
+  setSelectedAdviceKeys,
+  sageLoading,
+  sageError,
+}: {
+  analysis: TeamAnalysis | null;
+  question: string;
+  setQuestion: (value: string) => void;
+  askSage: (feedback?: string) => void;
+  sageFeedback: string;
+  setSageFeedback: (value: string) => void;
+  sageAdvice: SageAdviceResponse | null;
+  selectedAdviceKeys: Record<string, boolean>;
+  setSelectedAdviceKeys: (value: Record<string, boolean>) => void;
+  sageLoading: boolean;
+  sageError: string | null;
+}) {
   if (!analysis) return <p className="empty">Bekreft laget først.</p>;
   return (
     <div className="decision-stack">
-      <article className={analysis.issues.length ? "ai-placeholder blocked" : "ai-placeholder ready"}>
-        <h4>{analysis.issues.length ? "Fiks varslene før AI-råd" : "Klar for AI-råd"}</h4>
-        <p>{analysis.issues.length ? "AI bør ikke gi kaptein-, benk- eller bytteråd før laget er korrekt satt opp." : "Laget har 15 spillere, riktig start/benk/kaptein og ingen harde regelbrudd for valgt runde. Her kommer AI-anbefalingene senere."}</p>
+      <article className="sage-question">
+        <textarea value={question} onChange={(event) => setQuestion(event.target.value)} rows={3} />
+        <div className="sage-actions">
+          <button disabled={sageLoading || question.trim().length < 3} onClick={() => askSage()}>{sageLoading ? "Spør Sage…" : "Få Sage-råd"}</button>
+          <span>Bruker obligatorisk LLM-konfig på API-serveren.</span>
+        </div>
+        {sageError && <p className="sage-error">{sageError}</p>}
       </article>
+
+      {sageAdvice && (
+        <SageAnswer
+          response={sageAdvice}
+          analysis={analysis}
+          feedback={sageFeedback}
+          setFeedback={setSageFeedback}
+          askSage={askSage}
+          selectedAdviceKeys={selectedAdviceKeys}
+          setSelectedAdviceKeys={setSelectedAdviceKeys}
+          sageLoading={sageLoading}
+        />
+      )}
+
       {analysis.issues.map((issue) => <IssueCard issue={issue} key={`${issue.code}-${issue.player_id ?? issue.title}`} />)}
     </div>
+  );
+}
+
+function SageAnswer({
+  response,
+  analysis,
+  feedback,
+  setFeedback,
+  askSage,
+  selectedAdviceKeys,
+  setSelectedAdviceKeys,
+  sageLoading,
+}: {
+  response: SageAdviceResponse;
+  analysis: TeamAnalysis;
+  feedback: string;
+  setFeedback: (value: string) => void;
+  askSage: (feedback?: string) => void;
+  selectedAdviceKeys: Record<string, boolean>;
+  setSelectedAdviceKeys: (value: Record<string, boolean>) => void;
+  sageLoading: boolean;
+}) {
+  const actions = response.advice.priority_actions ?? [];
+  return (
+    <article className="sage-answer">
+      <header>
+        <div>
+          <h4>Sage sier</h4>
+          <p>{response.advice.summary}</p>
+        </div>
+        <span>{response.llm_provider} · {response.model}</span>
+      </header>
+
+      <section className="sage-followup inline-followup">
+        <h4>Svar på rådet</h4>
+        <p>Rett Sage hvis et forslag ikke gir mening, f.eks. “Munir er benkekeeper, ikke bruk bytte der”.</p>
+        <textarea value={feedback} onChange={(event) => setFeedback(event.target.value)} rows={3} />
+        <div className="sage-actions">
+          <button disabled={sageLoading || feedback.trim().length < 3} onClick={() => askSage(feedback.trim())}>{sageLoading ? "Oppdaterer…" : "Send til Sage"}</button>
+          <span>{selectedAdviceCount(selectedAdviceKeys)} råd tas med i oppfølgingen.</span>
+        </div>
+      </section>
+
+      {actions.length > 0 && (
+        <section className="sage-section">
+          <h5>Prioriterte handlinger</h5>
+          <div className="sage-action-list">
+            {actions.map((action, index) => (
+              <SageActionCard
+                action={action}
+                analysis={analysis}
+                response={response}
+                selected={selectedAdviceKeys[adviceKey("priority", index)] ?? false}
+                setSelected={(selected) => setSelectedAdviceKeys({ ...selectedAdviceKeys, [adviceKey("priority", index)]: selected })}
+                key={`${action.kind ?? "action"}-${index}`}
+              />
+            ))}
+          </div>
+        </section>
+      )}
+
+      {response.advice.transfer_advice.length > 0 && (
+        <section className="sage-section">
+          <h5>Bytteforslag</h5>
+          <div className="sage-action-list">
+            {response.advice.transfer_advice.map((action, index) => (
+              <SageActionCard
+                action={{ ...action, kind: "transfer", title: "Bytte" }}
+                analysis={analysis}
+                response={response}
+                selected={selectedAdviceKeys[adviceKey("transfer", index)] ?? false}
+                setSelected={(selected) => setSelectedAdviceKeys({ ...selectedAdviceKeys, [adviceKey("transfer", index)]: selected })}
+                key={`transfer-${index}`}
+              />
+            ))}
+          </div>
+        </section>
+      )}
+
+      {response.advice.captain_advice && (
+        <section className="sage-section compact-section">
+          <h5>Kaptein</h5>
+          <p>{response.advice.captain_advice.reason}</p>
+        </section>
+      )}
+
+      {response.advice.data_gaps.length > 0 && (
+        <section className="sage-section compact-section muted-section">
+          <h5>Datagap</h5>
+          <ul>{response.advice.data_gaps.map((gap) => <li key={gap}>{gap}</li>)}</ul>
+        </section>
+      )}
+    </article>
+  );
+}
+
+function SageActionCard({
+  action,
+  analysis,
+  response,
+  selected,
+  setSelected,
+}: {
+  action: SageAction;
+  analysis: TeamAnalysis;
+  response: SageAdviceResponse;
+  selected: boolean;
+  setSelected: (selected: boolean) => void;
+}) {
+  const outName = action.out_player_id ? playerNameById(analysis, response, action.out_player_id) : null;
+  const inName = action.in_player_id ? playerNameById(analysis, response, action.in_player_id) : null;
+  return (
+    <article className="sage-action-card">
+      <div className="sage-action-head">
+        <label className="advice-include">
+          <input checked={selected} type="checkbox" onChange={(event) => setSelected(event.target.checked)} />
+          Ta med i oppfølging
+        </label>
+        <span>{action.kind ?? "råd"}{action.confidence ? ` · ${action.confidence}` : ""}</span>
+        <h6>{action.title ?? "Anbefaling"}</h6>
+      </div>
+      {(outName || inName) && <p className="transfer-line">{outName ?? "—"} → {inName ?? action.in_player_id ?? "—"}</p>}
+      <p>{action.reason}</p>
+      {typeof action.expected_points_delta === "number" && <em>{action.expected_points_delta > 0 ? "+" : ""}{action.expected_points_delta.toFixed(2)} xP</em>}
+      {action.risks && action.risks.length > 0 && <ul>{action.risks.map((risk) => <li key={risk}>{risk}</li>)}</ul>}
+    </article>
   );
 }
 
@@ -535,6 +850,44 @@ function playerLabel(player: Player, eliminated = false) {
 
 function eliminatedIds(analysis: TeamAnalysis | null) {
   return new Set((analysis?.issues ?? []).filter((issue) => issue.code === "team_eliminated" && issue.player_id).map((issue) => issue.player_id as string));
+}
+
+function adviceKey(kind: "priority" | "transfer", index: number) {
+  return `${kind}:${index}`;
+}
+
+function defaultSelectedAdviceKeys(response: SageAdviceResponse) {
+  const selected: Record<string, boolean> = {};
+  response.advice.priority_actions.forEach((_, index) => { selected[adviceKey("priority", index)] = true; });
+  response.advice.transfer_advice.forEach((_, index) => { selected[adviceKey("transfer", index)] = true; });
+  return selected;
+}
+
+function selectedAdviceCount(selectedAdviceKeys: Record<string, boolean>) {
+  return Object.values(selectedAdviceKeys).filter(Boolean).length;
+}
+
+function selectedAdviceForFollowup(response: SageAdviceResponse, selectedAdviceKeys: Record<string, boolean>) {
+  return {
+    ...response.advice,
+    priority_actions: response.advice.priority_actions.filter((_, index) => selectedAdviceKeys[adviceKey("priority", index)]),
+    transfer_advice: response.advice.transfer_advice.filter((_, index) => selectedAdviceKeys[adviceKey("transfer", index)]),
+  };
+}
+
+function playerNameById(analysis: TeamAnalysis, response: SageAdviceResponse, playerId: string) {
+  const selectedName = analysis.selected_players.find((player) => player.player_id === playerId)?.name;
+  if (selectedName) return selectedName;
+
+  const squadName = response.context?.squad?.find((player) => player.player_id === playerId)?.name;
+  if (squadName) return squadName;
+
+  for (const candidates of Object.values(response.context?.transfer_candidates ?? {})) {
+    const candidateName = candidates.find((player) => player.player_id === playerId)?.name;
+    if (candidateName) return candidateName;
+  }
+
+  return playerId;
 }
 
 function findDraftOption(importResult: ImportResponse | null, playerId: string) {

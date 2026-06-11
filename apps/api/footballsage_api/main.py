@@ -12,12 +12,13 @@ import unicodedata
 from difflib import SequenceMatcher
 from functools import lru_cache
 from pathlib import Path
-from typing import Annotated
+from typing import Annotated, Any
 
 from fastapi import FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, ValidationError
 
+from . import sage_advisor
 from .worldcup_adapter import (
     fixture_difficulty,
     get_worldcup_data,
@@ -130,6 +131,9 @@ class TeamImportCandidate(BaseModel):
     confidence: float
     match: ImportPlayerOption | None
     alternatives: list[ImportPlayerOption]
+    suggested_role: str | None = Field(default=None, pattern="^(starter|bench)$")
+    is_captain: bool = False
+    is_vice_captain: bool = False
 
 
 class TeamImportResponse(BaseModel):
@@ -198,6 +202,38 @@ class TeamAnalysisResponse(BaseModel):
     captain_picks: list[Player]
     bench_candidates: list[Player]
     suggestions: list[TeamSuggestion]
+
+
+class SageAdviceRequest(BaseModel):
+    question: str = Field(min_length=3, max_length=1000)
+    selections: list[TeamSelection] = Field(default_factory=list, min_length=1, max_length=30)
+    provider: str = Field(default="tv2", pattern="^(fifa_official|tv2)$")
+    round: int = Field(default=1, ge=1, le=8)
+    budget: float = Field(default=SQUAD_BUDGET, gt=0)
+    bank: float | None = Field(default=None, ge=0)
+    free_transfers: int = Field(default=1, ge=0, le=15)
+    risk_profile: str = Field(default="balanced", pattern="^(safe|balanced|aggressive)$")
+    previous_advice: dict[str, Any] | None = None
+    user_feedback: str | None = Field(default=None, max_length=1000)
+
+
+class SageAdvice(BaseModel):
+    summary: str
+    priority_actions: list[dict[str, Any]] = Field(default_factory=list)
+    transfer_advice: list[dict[str, Any]] = Field(default_factory=list)
+    captain_advice: dict[str, Any] | None = None
+    problems_found: list[dict[str, Any]] = Field(default_factory=list)
+    risks: list[str] = Field(default_factory=list)
+    data_gaps: list[str] = Field(default_factory=list)
+
+
+class SageAdviceResponse(BaseModel):
+    provider: str
+    round: int
+    llm_provider: str
+    model: str
+    advice: SageAdvice
+    context: dict[str, Any]
 
 
 def expected_points(position: str, price: float, status: str, difficulty: int | None) -> tuple[float, list[str]]:
@@ -537,13 +573,65 @@ def line_score(line_norm: str, player_norm: str) -> float:
         return 0.99
     if line_norm in player_norm and len(line_norm) >= 8:
         return 0.9
-    line_tokens = set(line_norm.split())
-    player_tokens = set(player_norm.split())
-    if line_tokens and line_tokens <= player_tokens and len(line_norm) >= 5:
+
+    line_tokens = line_norm.split()
+    player_tokens = player_norm.split()
+    line_token_set = set(line_tokens)
+    player_token_set = set(player_tokens)
+    if line_token_set and line_token_set <= player_token_set and len(line_norm) >= 5:
         return 0.82
-    if line_norm in player_tokens and len(line_norm) >= 5:
+    if line_norm in player_token_set and len(line_norm) >= 5:
         return 0.82
-    return SequenceMatcher(None, line_norm, player_norm).ratio()
+
+    # Screenshot OCR often returns a whole table row, e.g.
+    # "kee oan nytand eroge ... 4b". Compare the player name against
+    # short token windows inside the row instead of only the full noisy line.
+    scores = [SequenceMatcher(None, line_norm, player_norm).ratio()]
+    player_len = len(player_tokens)
+    for size in range(max(1, player_len - 1), min(len(line_tokens), player_len + 3) + 1):
+        for start in range(0, len(line_tokens) - size + 1):
+            window = " ".join(line_tokens[start : start + size])
+            if len(window) < 4:
+                continue
+            scores.append(SequenceMatcher(None, window, player_norm).ratio())
+            scores.append(SequenceMatcher(None, window.replace(" ", ""), player_norm.replace(" ", "")).ratio())
+    return max(scores)
+
+
+def parse_import_line_metadata(line: str) -> tuple[str, str | None, bool, bool]:
+    role: str | None = None
+    is_captain = False
+    is_vice_captain = False
+    value = line.strip()
+
+    if "|" in value:
+        parts = [part.strip() for part in value.split("|") if part.strip()]
+        if parts:
+            head = " ".join(parts[:-1]).casefold()
+            value = parts[-1]
+            if "bench" in head or "benk" in head:
+                role = "bench"
+            if "starter" in head or "start" in head or "xi" in head:
+                role = "starter"
+            if re.search(r"\bvc\b|vice", head):
+                is_vice_captain = True
+            if re.search(r"\bc\b|captain|kaptein", head) and not is_vice_captain:
+                is_captain = True
+
+    tag_text = value.casefold()
+    if re.search(r"\[(bench|benk|b)\]|\((bench|benk|b)\)|\bbench\b|\bbenk\b", tag_text):
+        role = "bench"
+    if re.search(r"\[(starter|start)\]|\((starter|start)\)|\bstarter\b|\bstart\b", tag_text):
+        role = "starter"
+    if re.search(r"\bvc\b|vice", tag_text):
+        is_vice_captain = True
+    if re.search(r"\bc\b|captain|kaptein", tag_text) and not is_vice_captain:
+        is_captain = True
+
+    value = re.sub(r"\b(starter|start|bench|benk|captain|kaptein|vice captain|vicekaptein|vc|c)\b", " ", value, flags=re.I)
+    value = re.sub(r"[\[\]()]", " ", value)
+    value = re.sub(r"\s+", " ", value).strip(" -•*")
+    return value, role, is_captain, is_vice_captain
 
 
 def match_team_text(text: str, provider: str) -> TeamImportResponse:
@@ -558,6 +646,16 @@ def match_team_text(text: str, provider: str) -> TeamImportResponse:
             existing = candidates_by_player_id.get(candidate.match.player_id)
             if not existing or candidate.confidence > existing.confidence:
                 candidates_by_player_id[candidate.match.player_id] = candidate
+            elif existing and candidate.confidence >= existing.confidence - 0.03:
+                if candidate.suggested_role or candidate.is_captain or candidate.is_vice_captain:
+                    candidates_by_player_id[candidate.match.player_id] = existing.model_copy(
+                        update={
+                            "raw_text": candidate.raw_text,
+                            "suggested_role": candidate.suggested_role or existing.suggested_role,
+                            "is_captain": existing.is_captain or candidate.is_captain,
+                            "is_vice_captain": existing.is_vice_captain or candidate.is_vice_captain,
+                        }
+                    )
         elif candidate.raw_text:
             unmatched.append(candidate)
 
@@ -578,7 +676,8 @@ def match_team_text(text: str, provider: str) -> TeamImportResponse:
     for line in lines:
         if not re.search(r"[A-Za-zÀ-ÿ]", line):
             continue
-        line_norm = normalize_match_text(line)
+        player_text, suggested_role, is_captain, is_vice_captain = parse_import_line_metadata(line)
+        line_norm = normalize_match_text(player_text)
         if len(line_norm) < 4:
             continue
 
@@ -595,11 +694,14 @@ def match_team_text(text: str, provider: str) -> TeamImportResponse:
         status = "matched" if best_score >= 0.86 else "review" if best_score >= 0.70 else "unmatched"
         add_candidate(
             TeamImportCandidate(
-                raw_text=line,
+                raw_text=player_text,
                 status=status,
                 confidence=round(best_score, 3),
                 match=import_option(best_row) if status != "unmatched" else None,
                 alternatives=alternatives,
+                suggested_role=suggested_role,
+                is_captain=is_captain,
+                is_vice_captain=is_vice_captain,
             )
         )
 
@@ -733,6 +835,50 @@ def analyze_team(payload: TeamAnalysisRequest) -> TeamAnalysisResponse:
         raise HTTPException(status_code=503, detail=str(exc)) from exc
 
 
+@app.post("/sage/advice", response_model=SageAdviceResponse)
+def sage_advice(payload: SageAdviceRequest) -> SageAdviceResponse:
+    try:
+        analysis = analyze_team_request(
+            TeamAnalysisRequest(
+                selections=payload.selections,
+                provider=payload.provider,
+                round=payload.round,
+                budget=payload.budget,
+            )
+        )
+        available_players = load_built_players(payload.provider, payload.round)
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+
+    bank = payload.bank if payload.bank is not None else max(analysis.remaining_budget, 0)
+    context = sage_advisor.build_sage_context(
+        question=payload.question,
+        risk_profile=payload.risk_profile,
+        free_transfers=payload.free_transfers,
+        bank=bank,
+        analysis=analysis.model_dump(),
+        available_players=[player.model_dump() for player in available_players],
+        previous_advice=payload.previous_advice,
+        user_feedback=payload.user_feedback,
+    )
+    try:
+        advice_payload, llm_meta = sage_advisor.generate_sage_advice(context)
+        advice = SageAdvice.model_validate(advice_payload)
+    except sage_advisor.SageConfigError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+    except (sage_advisor.SageLLMError, ValidationError) as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
+
+    return SageAdviceResponse(
+        provider=payload.provider,
+        round=payload.round,
+        llm_provider=llm_meta["provider"],
+        model=llm_meta["model"],
+        advice=advice,
+        context=context,
+    )
+
+
 @app.post("/team/import-text", response_model=TeamImportResponse)
 def import_team_text(payload: TeamImportTextRequest) -> TeamImportResponse:
     if not payload.text.strip():
@@ -753,16 +899,28 @@ def import_team_screenshot(payload: TeamImportScreenshotRequest) -> TeamImportRe
     if len(image_bytes) > 8 * 1024 * 1024:
         raise HTTPException(status_code=413, detail="Image is too large; max 8 MB")
 
-    text = run_tesseract(image_bytes, payload.filename)
+    ocr_notes: list[str] = []
+    try:
+        text, llm_meta = sage_advisor.ocr_team_screenshot(payload.image_base64)
+        ocr_notes.append(f"Screenshot OCR used {llm_meta['provider']} model {llm_meta['model']}.")
+    except sage_advisor.SageConfigError:
+        text = run_tesseract(image_bytes, payload.filename)
+        ocr_notes.append("Screenshot OCR used local tesseract because LLM OCR is not configured.")
+    except Exception as exc:
+        text = run_tesseract(image_bytes, payload.filename)
+        ocr_notes.append(f"LLM screenshot OCR failed; used local tesseract fallback ({type(exc).__name__}).")
+
     if not text:
         return TeamImportResponse(
             provider=payload.provider,
             raw_text="",
             needs_manual_verification=True,
             candidates=[],
-            notes=["OCR returned no text. Try a tighter crop around the team/player names."],
+            notes=["OCR returned no text. Try a tighter crop around the team/player names."] + ocr_notes,
         )
     try:
-        return match_team_text(text, payload.provider)
+        response = match_team_text(text, payload.provider)
+        response.notes = ocr_notes + response.notes
+        return response
     except FileNotFoundError as exc:
         raise HTTPException(status_code=503, detail=str(exc)) from exc

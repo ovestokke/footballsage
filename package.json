@@ -6,7 +6,7 @@
   "scripts": {
     "dev:web": "pnpm --filter @footballsage/web dev",
     "build:web": "pnpm --filter @footballsage/web build",
-    "test:api": "cd apps/api && pytest -q",
+    "test:api": "cd apps/api && ([ -x .venv/bin/python ] && .venv/bin/python -m pytest -q || python3 -m pytest -q)",
     "import:fifa-prices": "python3 scripts/import_fifa_fantasy_prices.py",
     "import:tv2-prices": "python3 scripts/import_tv2_fantasy_prices.py",
     "map:players": "python3 scripts/build_player_mapping.py"

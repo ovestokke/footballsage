@@ -109,15 +109,27 @@ h1, h2, h3, h4, p { margin-top: 0; }
 }
 
 .scene-steps { display: flex; flex-wrap: wrap; gap: 8px; list-style: none; margin: 0; padding: 0; }
-.scene-steps li {
+.scene-steps button,
+.scene-steps span {
+  background: transparent;
   border: 1px solid var(--border);
   border-radius: 999px;
   color: var(--muted);
+  cursor: default;
+  font: inherit;
   font-weight: 800;
   padding: 8px 12px;
   white-space: nowrap;
 }
-.scene-steps li.active { background: var(--text); border-color: var(--text); color: var(--surface); }
+.scene-steps button {
+  cursor: pointer;
+}
+.scene-steps button:hover {
+  background: var(--surface-hover);
+  border-color: var(--border-strong);
+}
+.scene-steps button.active,
+.scene-steps span.active { background: var(--text); border-color: var(--text); color: var(--surface); }
 .global-message { background: var(--danger-bg); border: 1px solid rgba(166, 53, 37, 0.25); border-radius: 14px; color: var(--danger); padding: 12px 14px; }
 
 .scene-card { padding: clamp(22px, 4vw, 34px); }
@@ -395,6 +407,109 @@ select, input {
 .issue-card h4, .ai-placeholder h4 { font-size: 1rem; margin-bottom: 6px; }
 .issue-card p, .ai-placeholder p { color: var(--muted); line-height: 1.42; }
 .issue-card p, .ai-placeholder p { margin-bottom: 6px; }
+.sage-question textarea,
+.sage-followup textarea { min-height: 92px; }
+.sage-followup {
+  background: #fbf9f3;
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  padding: 15px;
+}
+.sage-followup h4 { font-size: 1rem; margin-bottom: 6px; }
+.sage-followup p { color: var(--muted); line-height: 1.42; }
+.sage-actions {
+  align-items: center;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  margin-top: 12px;
+}
+.sage-actions span { color: var(--muted); font-size: 0.9rem; }
+.sage-error {
+  background: var(--danger-bg);
+  border: 1px solid rgba(166, 53, 37, 0.25);
+  border-radius: 12px;
+  color: var(--danger);
+  margin: 12px 0 0;
+  padding: 10px 12px;
+}
+.sage-answer {
+  background: #fbf9f3;
+  border: 1px solid var(--border);
+  border-radius: 16px;
+  padding: 18px;
+}
+.sage-answer > header {
+  align-items: start;
+  border-bottom: 1px solid var(--border);
+  display: grid;
+  gap: 14px;
+  grid-template-columns: minmax(0, 1fr) auto;
+  margin-bottom: 16px;
+  padding-bottom: 14px;
+}
+.sage-answer h4 { font-family: var(--font-display); font-size: 1.45rem; letter-spacing: -0.03em; margin-bottom: 6px; }
+.sage-answer header p { color: var(--text); line-height: 1.5; margin-bottom: 0; }
+.sage-answer header span {
+  background: var(--accent-soft);
+  border-radius: 999px;
+  color: var(--accent);
+  font-family: var(--font-mono);
+  font-size: 0.72rem;
+  font-weight: 850;
+  padding: 6px 9px;
+  white-space: nowrap;
+}
+.sage-section { margin-top: 16px; }
+.sage-section h5 {
+  color: var(--muted);
+  font-family: var(--font-mono);
+  font-size: 0.76rem;
+  letter-spacing: 0.08em;
+  margin-bottom: 8px;
+  text-transform: uppercase;
+}
+.sage-action-list { display: grid; gap: 10px; }
+.sage-action-card {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  box-shadow: inset 4px 0 0 var(--accent);
+  padding: 14px;
+}
+.sage-action-head { display: grid; gap: 4px; }
+.advice-include {
+  align-items: center;
+  color: var(--muted);
+  display: inline-flex;
+  font-size: 0.82rem;
+  font-weight: 800;
+  gap: 7px;
+  margin-bottom: 4px;
+}
+.advice-include input { width: auto; }
+.sage-action-card span {
+  color: var(--accent);
+  display: block;
+  font-family: var(--font-mono);
+  font-size: 0.72rem;
+  font-weight: 850;
+  margin-bottom: 4px;
+  text-transform: uppercase;
+}
+.sage-action-card h6 { font-size: 1rem; margin: 0 0 6px; }
+.sage-action-card p { color: var(--muted); line-height: 1.45; margin-bottom: 6px; }
+.sage-action-card em { color: var(--accent); font-style: normal; font-weight: 850; }
+.transfer-line { color: var(--text) !important; font-weight: 800; }
+.compact-section {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  padding: 12px;
+}
+.compact-section p, .compact-section li { color: var(--muted); line-height: 1.45; }
+.compact-section p, .compact-section ul { margin-bottom: 0; }
+.muted-section { background: var(--surface-hover); }
 .empty { color: var(--muted); line-height: 1.45; margin: 0; }
 
 @media (max-width: 900px) {

@@ -68,6 +68,19 @@ docker compose up --build
 - `GET /players?round=1&provider=fifa_official|tv2` med pris, mapping-status, next fixture og enkel v1 xP
 - `POST /team/import-screenshot` for initiell OCR av TV2-lagoppstilling, alltid med manuell verifikasjon
 - `POST /team/import-text` for samme matching fra limt tekst
+- `POST /sage/advice` for LLM-basert Sage-rådgivning over laganalyse, fixtures, xP og bytte-kandidater
+
+Sage krever LLM-konfig på API-serveren:
+
+```bash
+SAGE_LLM_PROVIDER=openai|openrouter|anthropic
+SAGE_LLM_MODEL=<model>
+OPENAI_API_KEY=...        # eller OPENROUTER_API_KEY / ANTHROPIC_API_KEY
+
+# Valgfritt: egen vision-modell for screenshot-OCR.
+# Hvis OpenRouter er konfigurert og denne mangler, brukes google/gemini-3-flash-preview for OCR.
+SAGE_OCR_LLM_MODEL=<vision-model>
+```
 
 ## Mapping status
 

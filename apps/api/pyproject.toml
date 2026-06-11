@@ -4,7 +4,9 @@ version = "0.1.0"
 description = "FastAPI service for FootballSage fantasy logic"
 requires-python = ">=3.12"
 dependencies = [
+  "anthropic>=0.40",
   "fastapi>=0.115",
+  "openai>=1.55",
   "uvicorn[standard]>=0.32",
 ]
 
