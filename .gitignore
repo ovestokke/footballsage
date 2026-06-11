@@ -220,6 +220,7 @@ __marimo__/
 # FootballSage / monorepo
 node_modules/
 **/node_modules/
+.pnpm-store/
 .next/
 **/.next/
 out/

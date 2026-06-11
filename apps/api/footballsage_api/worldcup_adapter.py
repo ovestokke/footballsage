@@ -245,6 +245,15 @@ def get_worldcup_data() -> WorldCupData:
     return _load_from_api() or _load_from_dump()
 
 
+KNOCKOUT_ROUND_STAGE = {
+    4: "r32",
+    5: "r16",
+    6: "qf",
+    7: "sf",
+    8: "final",
+}
+
+
 def next_fixture_for_team(team_code: str, *, round: int | None = None) -> WorldCupFixture | None:
     data = get_worldcup_data()
     team = data.teams_by_code.get(team_code)
@@ -261,7 +270,19 @@ def next_fixture_for_team(team_code: str, *, round: int | None = None) -> WorldC
         # worldcup.matchday is calendar matchday, not fantasy MD1/MD2/MD3.
         # For fantasy group rounds, use each team's nth group fixture.
         return group_fixtures[round - 1]
+
+    knockout_stage = KNOCKOUT_ROUND_STAGE.get(round or 0)
+    if knockout_stage:
+        knockout_fixture = next((fixture for fixture in fixtures if fixture.stage == knockout_stage), None)
+        if knockout_fixture:
+            return knockout_fixture
+        return None
+
     return fixtures[0] if fixtures else None
+
+
+def team_has_fixture_in_round(team_code: str, round: int) -> bool:
+    return next_fixture_for_team(team_code, round=round) is not None
 
 
 def opponent_for_fixture(team_code: str, fixture: WorldCupFixture) -> WorldCupTeam | None:

@@ -4,6 +4,7 @@ import base64
 import binascii
 import csv
 import re
+from collections import Counter
 import shutil
 import subprocess
 import tempfile
@@ -22,6 +23,7 @@ from .worldcup_adapter import (
     get_worldcup_data,
     next_fixture_for_team,
     opponent_for_fixture,
+    team_has_fixture_in_round,
 )
 
 ROOT = Path(__file__).resolve().parents[3]
@@ -32,6 +34,10 @@ PRICE_CSV_BY_PROVIDER = {
     "fifa_official": PRICE_CSV,
     "tv2": TV2_PRICE_CSV,
 }
+SQUAD_SIZE = 15
+SQUAD_BUDGET = 100.0
+MAX_PLAYERS_PER_COUNTRY = 3
+POSITION_TARGETS = {"GK": 2, "DEF": 5, "MID": 5, "FWD": 3}
 
 app = FastAPI(title="FootballSage API", version="0.1.0")
 app.add_middleware(
@@ -134,6 +140,66 @@ class TeamImportResponse(BaseModel):
     notes: list[str]
 
 
+class TeamSelection(BaseModel):
+    player_id: str
+    role: str = Field(default="starter", pattern="^(starter|bench)$")
+    is_captain: bool = False
+    is_vice_captain: bool = False
+
+
+class TeamAnalysisRequest(BaseModel):
+    player_ids: list[str] = Field(default_factory=list, max_length=30)
+    selections: list[TeamSelection] = Field(default_factory=list, max_length=30)
+    provider: str = Field(default="tv2", pattern="^(fifa_official|tv2)$")
+    round: int = Field(default=1, ge=1, le=8)
+    budget: float = Field(default=SQUAD_BUDGET, gt=0)
+
+
+class TeamIssue(BaseModel):
+    code: str
+    severity: str
+    title: str
+    detail: str
+    player_id: str | None = None
+
+
+class TeamSuggestion(BaseModel):
+    kind: str
+    severity: str
+    title: str
+    action: str
+    reason: str
+    expected_gain: float | None = None
+    out_player_id: str | None = None
+    in_player_id: str | None = None
+    player: Player | None = None
+    replacement: Player | None = None
+
+
+class TeamLineupPlayer(BaseModel):
+    player: Player
+    role: str
+    is_captain: bool
+    is_vice_captain: bool
+
+
+class TeamAnalysisResponse(BaseModel):
+    provider: str
+    round: int
+    budget: float
+    total_price: float
+    remaining_budget: float
+    expected_points: float
+    player_count: int
+    position_counts: dict[str, int]
+    selected_players: list[Player]
+    lineup: list[TeamLineupPlayer]
+    issues: list[TeamIssue]
+    captain_picks: list[Player]
+    bench_candidates: list[Player]
+    suggestions: list[TeamSuggestion]
+
+
 def expected_points(position: str, price: float, status: str, difficulty: int | None) -> tuple[float, list[str]]:
     """Explainable v1 placeholder until minutes/odds/team-strength are richer."""
     appearance = 2.0 if status == "playing" else 0.5
@@ -199,6 +265,9 @@ def build_player(row: dict[str, str], round_id: int, provider: str) -> Player:
     next_fixture = fixture_summary(row["team_abbr"], round_id)
     difficulty = next_fixture.difficulty if next_fixture else None
     projected_points, reasons = expected_points(row["position"], float(row["price"]), row["status"], difficulty)
+    if round_id > 3 and not next_fixture:
+        projected_points = 0.0
+        reasons.append("team has no known fixture in selected knockout round")
 
     row_worldcup_id = row.get("worldcup_player_id") or ""
     mapping_status = mapping.get("status") or ("matched" if row_worldcup_id else None)
@@ -226,6 +295,218 @@ def build_player(row: dict[str, str], round_id: int, provider: str) -> Player:
         next_fixture=next_fixture,
         expected_points=projected_points,
         reasons=reasons,
+    )
+
+
+def load_built_players(provider: str, round_id: int) -> list[Player]:
+    return [build_player(row, round_id, provider) for row in load_players(provider)]
+
+
+def analyze_team_request(payload: TeamAnalysisRequest) -> TeamAnalysisResponse:
+    available_players = load_built_players(payload.provider, payload.round)
+    players_by_id = {player.player_id: player for player in available_players}
+    requested_ids = [selection.player_id for selection in payload.selections] if payload.selections else payload.player_ids
+    selection_by_id = {selection.player_id: selection for selection in payload.selections}
+    selected_players = [players_by_id[player_id] for player_id in requested_ids if player_id in players_by_id]
+    lineup = [
+        TeamLineupPlayer(
+            player=player,
+            role=selection_by_id.get(player.player_id, TeamSelection(player_id=player.player_id)).role,
+            is_captain=selection_by_id.get(player.player_id, TeamSelection(player_id=player.player_id)).is_captain,
+            is_vice_captain=selection_by_id.get(player.player_id, TeamSelection(player_id=player.player_id)).is_vice_captain,
+        )
+        for player in selected_players
+    ]
+
+    duplicate_ids = [player_id for player_id, count in Counter(requested_ids).items() if count > 1]
+    missing_ids = [player_id for player_id in requested_ids if player_id not in players_by_id]
+    selected_ids = {player.player_id for player in selected_players}
+    total_price = round(sum(player.price for player in selected_players), 2)
+    expected_total = round(sum(player.expected_points for player in selected_players), 2)
+    remaining_budget = round(payload.budget - total_price, 2)
+    position_counts = {position: sum(1 for player in selected_players if player.position == position) for position in POSITION_TARGETS}
+
+    issues: list[TeamIssue] = []
+    if missing_ids:
+        issues.append(
+            TeamIssue(
+                code="missing_players",
+                severity="bad",
+                title="Noen spillere finnes ikke i prislisten",
+                detail=", ".join(missing_ids[:5]),
+            )
+        )
+    if duplicate_ids:
+        issues.append(
+            TeamIssue(
+                code="duplicate_players",
+                severity="bad",
+                title="Duplikater i laget",
+                detail="Samme spiller er valgt mer enn én gang.",
+                player_id=duplicate_ids[0],
+            )
+        )
+    if len(selected_players) != SQUAD_SIZE:
+        severity = "warn" if selected_players else "bad"
+        issues.append(
+            TeamIssue(
+                code="squad_size",
+                severity=severity,
+                title=f"Laget har {len(selected_players)} av {SQUAD_SIZE} spillere",
+                detail="Legg inn hele troppen for tryggere råd." if selected_players else "Importer eller legg til spillere for å starte analysen.",
+            )
+        )
+    if remaining_budget < 0:
+        issues.append(
+            TeamIssue(
+                code="over_budget",
+                severity="bad",
+                title="Laget er over budsjett",
+                detail=f"Du må frigjøre minst {abs(remaining_budget):.1f}m.",
+            )
+        )
+
+    for position, target in POSITION_TARGETS.items():
+        count = position_counts[position]
+        if selected_players and count != target:
+            issues.append(
+                TeamIssue(
+                    code=f"position_{position.lower()}",
+                    severity="warn",
+                    title=f"{position}: {count}/{target}",
+                    detail="Posisjonsfordelingen matcher ikke en full fantasy-tropp.",
+                )
+            )
+
+    if payload.selections:
+        starter_count = sum(1 for line in lineup if line.role == "starter")
+        bench_count = sum(1 for line in lineup if line.role == "bench")
+        captain_count = sum(1 for line in lineup if line.is_captain)
+        vice_count = sum(1 for line in lineup if line.is_vice_captain)
+        if len(selected_players) == SQUAD_SIZE and starter_count != 11:
+            issues.append(
+                TeamIssue(
+                    code="starter_count",
+                    severity="bad",
+                    title=f"Startelleveren har {starter_count}/11 spillere",
+                    detail="Marker nøyaktig 11 spillere som spiller fra start.",
+                )
+            )
+        if len(selected_players) == SQUAD_SIZE and bench_count != 4:
+            issues.append(
+                TeamIssue(
+                    code="bench_count",
+                    severity="bad",
+                    title=f"Benken har {bench_count}/4 spillere",
+                    detail="Marker nøyaktig 4 spillere som benk.",
+                )
+            )
+        if captain_count != 1:
+            issues.append(
+                TeamIssue(
+                    code="captain_missing" if captain_count == 0 else "captain_multiple",
+                    severity="bad",
+                    title="Kaptein må settes" if captain_count == 0 else "Flere kapteiner er valgt",
+                    detail="AI-råd trenger én tydelig kaptein fra laget ditt.",
+                )
+            )
+        if vice_count != 1:
+            issues.append(
+                TeamIssue(
+                    code="vice_captain_missing" if vice_count == 0 else "vice_captain_multiple",
+                    severity="bad",
+                    title="Vicekaptein må settes" if vice_count == 0 else "Flere vicekapteiner er valgt",
+                    detail="AI-råd trenger én tydelig vicekaptein fra laget ditt.",
+                )
+            )
+        captain_line = next((line for line in lineup if line.is_captain), None)
+        vice_line = next((line for line in lineup if line.is_vice_captain), None)
+        if captain_line and captain_line.role != "starter":
+            issues.append(
+                TeamIssue(
+                    code="captain_benched",
+                    severity="bad",
+                    title="Kaptein er markert som benk",
+                    detail=f"{captain_line.player.name} må enten starte eller kaptein må flyttes.",
+                    player_id=captain_line.player.player_id,
+                )
+            )
+        if vice_line and vice_line.role != "starter":
+            issues.append(
+                TeamIssue(
+                    code="vice_captain_benched",
+                    severity="bad",
+                    title="Vicekaptein er markert som benk",
+                    detail=f"{vice_line.player.name} må enten starte eller vicekaptein må flyttes.",
+                    player_id=vice_line.player.player_id,
+                )
+            )
+        if captain_line and vice_line and captain_line.player.player_id == vice_line.player.player_id:
+            issues.append(
+                TeamIssue(
+                    code="captain_same_as_vice",
+                    severity="bad",
+                    title="Kaptein og vicekaptein er samme spiller",
+                    detail="Velg to forskjellige spillere for C og VC.",
+                    player_id=captain_line.player.player_id,
+                )
+            )
+
+    country_counts = Counter(player.team_abbr for player in selected_players)
+    for team_code, count in sorted(country_counts.items()):
+        if count > MAX_PLAYERS_PER_COUNTRY:
+            issues.append(
+                TeamIssue(
+                    code="country_limit",
+                    severity="bad",
+                    title=f"For mange spillere fra {team_code}",
+                    detail=f"TV2-regelen er maks {MAX_PLAYERS_PER_COUNTRY} spillere per land. Du har {count}.",
+                )
+            )
+
+    for player in selected_players:
+        if payload.round > 3 and not team_has_fixture_in_round(player.team_abbr, payload.round):
+            issues.append(
+                TeamIssue(
+                    code="team_eliminated",
+                    severity="bad",
+                    title=f"{player.name} har ikke kamp i valgt runde",
+                    detail=f"{player.team_abbr} er ikke registrert med fixture i runde {payload.round}. Spilleren bør byttes ut hvis laget er ute.",
+                    player_id=player.player_id,
+                )
+            )
+        if player.status != "playing":
+            issues.append(
+                TeamIssue(
+                    code="player_status",
+                    severity="bad",
+                    title=f"{player.name} er markert som {player.status}",
+                    detail="Bytt ut eller bekreft status før deadline.",
+                    player_id=player.player_id,
+                )
+            )
+
+    # Keep this endpoint to deterministic rule checks only. Optimization/captaincy/transfer
+    # advice will come from an AI layer later; mechanical suggestions are intentionally empty.
+    captain_picks: list[Player] = []
+    bench_candidates: list[Player] = []
+    suggestions: list[TeamSuggestion] = []
+
+    return TeamAnalysisResponse(
+        provider=payload.provider,
+        round=payload.round,
+        budget=payload.budget,
+        total_price=total_price,
+        remaining_budget=remaining_budget,
+        expected_points=expected_total,
+        player_count=len(selected_players),
+        position_counts=position_counts,
+        selected_players=selected_players,
+        lineup=lineup,
+        issues=issues[:12],
+        captain_picks=captain_picks,
+        bench_candidates=bench_candidates,
+        suggestions=suggestions[:8],
     )
 
 
@@ -442,6 +723,14 @@ def players(
         ]
 
     return [build_player(row, round, provider) for row in rows[:limit]]
+
+
+@app.post("/team/analyze", response_model=TeamAnalysisResponse)
+def analyze_team(payload: TeamAnalysisRequest) -> TeamAnalysisResponse:
+    try:
+        return analyze_team_request(payload)
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
 
 
 @app.post("/team/import-text", response_model=TeamImportResponse)

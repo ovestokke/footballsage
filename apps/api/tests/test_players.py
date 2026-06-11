@@ -63,3 +63,78 @@ def test_import_text_returns_manual_verification_candidates() -> None:
     assert payload["needs_manual_verification"] is True
     matched_names = {candidate["match"]["name"] for candidate in payload["candidates"] if candidate["match"]}
     assert {"Erling Haaland", "Mohamed Salah", "Marcus Rashford"} <= matched_names
+
+
+def test_team_analyze_returns_validation_and_suggestions() -> None:
+    client = TestClient(app)
+    import_response = client.post(
+        "/team/import-text",
+        json={"provider": "tv2", "text": "Erling Haaland\nMohamed Salah\nMarcus Rashford"},
+    )
+    player_ids = [candidate["match"]["player_id"] for candidate in import_response.json()["candidates"] if candidate["match"]]
+
+    response = client.post("/team/analyze", json={"provider": "tv2", "player_ids": player_ids})
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["player_count"] == 3
+    assert payload["total_price"] > 0
+    assert payload["expected_points"] > 0
+    assert payload["captain_picks"] == []
+    assert payload["bench_candidates"] == []
+    assert payload["suggestions"] == []
+    assert any(issue["code"] == "squad_size" for issue in payload["issues"])
+
+
+def test_team_analyze_flags_players_without_knockout_fixture() -> None:
+    client = TestClient(app)
+    import_response = client.post(
+        "/team/import-text",
+        json={"provider": "tv2", "text": "Erling Haaland"},
+    )
+    player_ids = [candidate["match"]["player_id"] for candidate in import_response.json()["candidates"] if candidate["match"]]
+
+    response = client.post("/team/analyze", json={"provider": "tv2", "player_ids": player_ids, "round": 4})
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert any(issue["code"] == "team_eliminated" for issue in payload["issues"])
+    assert payload["selected_players"][0]["expected_points"] == 0
+
+
+def test_team_analyze_enforces_max_three_players_per_country() -> None:
+    client = TestClient(app)
+    import_response = client.post(
+        "/team/import-text",
+        json={"provider": "tv2", "text": "Lionel Messi\nLautaro Martínez\nJulián Alvarez\nEmiliano Martínez"},
+    )
+    player_ids = [candidate["match"]["player_id"] for candidate in import_response.json()["candidates"] if candidate["match"]]
+
+    response = client.post("/team/analyze", json={"provider": "tv2", "player_ids": player_ids})
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert any(issue["code"] == "country_limit" for issue in payload["issues"])
+    assert payload["suggestions"] == []
+
+
+def test_team_analyze_requires_lineup_roles_when_supplied() -> None:
+    client = TestClient(app)
+    import_response = client.post(
+        "/team/import-text",
+        json={"provider": "tv2", "text": "Erling Haaland\nMohamed Salah"},
+    )
+    player_ids = [candidate["match"]["player_id"] for candidate in import_response.json()["candidates"] if candidate["match"]]
+    selections = [
+        {"player_id": player_ids[0], "role": "bench", "is_captain": True, "is_vice_captain": False},
+        {"player_id": player_ids[1], "role": "starter", "is_captain": False, "is_vice_captain": True},
+    ]
+
+    response = client.post("/team/analyze", json={"provider": "tv2", "selections": selections})
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["lineup"][0]["role"] == "bench"
+    assert payload["lineup"][0]["is_captain"] is True
+    assert payload["lineup"][1]["is_vice_captain"] is True
+    assert any(issue["code"] == "captain_benched" for issue in payload["issues"])
