@@ -99,4 +99,4 @@ scripts/               Import-/sync-scripts
 
 ## License og data
 
-Kode i dette repoet er lisensiert under GPL-3.0 fordi GitHub-repoet ble initialisert med GPL-3.0. Tredjepartsdata eies av respektive kilder; se `docs/DATA_SOURCES.md`. `services/worldcup` er en git submodule mot `emrbli/worldcup` og beholder sin egen lisens/attribusjon.
+Kode i dette repoet er MIT-lisensiert. Tredjepartsdata eies av respektive kilder; se `docs/DATA_SOURCES.md`. `services/worldcup` er en git submodule mot `emrbli/worldcup` og beholder sin egen lisens/attribusjon.
