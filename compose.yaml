@@ -1,14 +1,59 @@
 services:
+  worldcup-postgres:
+    image: postgres:17
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: ${WORLDCUP_DB_PASSWORD:-dev}
+      POSTGRES_DB: worldcup
+    volumes:
+      - worldcup-pgdata:/var/lib/postgresql/data
+      - ./services/worldcup/db/dump:/docker-entrypoint-initdb.d:ro
+    expose:
+      - "5432"
+    restart: unless-stopped
+
+  worldcup-api:
+    image: node:24-alpine
+    working_dir: /app/services/worldcup
+    command: sh -c "corepack enable && pnpm install --ignore-workspace --prod=false && pnpm build && NODE_ENV=production pnpm start:prod"
+    environment:
+      CI: "true"
+      NODE_ENV: production
+      DATABASE_URL: postgres://postgres:${WORLDCUP_DB_PASSWORD:-dev}@worldcup-postgres:5432/worldcup
+      # Upstream worldcup-api requires a non-empty value at startup even when
+      # football-data jobs are disabled. ESPN live sync works without a real token.
+      FOOTBALL_DATA_TOKEN: ${FOOTBALL_DATA_TOKEN:-dev-placeholder}
+      LIVE_SYNC_ENABLED: "true"
+      LIVE_SYNC_CRON: "*/30 * * * * *"
+      LINEUPS_SYNC_ENABLED: "false"
+      OFFICIALS_SYNC_ENABLED: "false"
+      PUSH_ENABLED: "false"
+      PORT: "3001"
+    volumes:
+      - .:/app
+      - /app/services/worldcup/node_modules
+      - pnpm-store:/root/.local/share/pnpm/store
+    expose:
+      - "3001"
+    depends_on:
+      - worldcup-postgres
+    restart: unless-stopped
+
   api:
     image: ghcr.io/ovestokke/footballsage-api:latest
     env_file:
-      - .env
+      - path: .env
+        required: false
+    environment:
+      WORLDCUP_API_URL: http://worldcup-api:3001/v1
     volumes:
       # Persist saved teams only. Static price/mapping data is baked into the image.
       # Mounting ./data over /app/data would hide required CSV files in the image.
       - ./data/teams:/app/data/teams
     expose:
       - "8000"
+    depends_on:
+      - worldcup-api
     restart: unless-stopped
 
   web:
@@ -21,3 +66,7 @@ services:
     depends_on:
       - api
     restart: unless-stopped
+
+volumes:
+  worldcup-pgdata:
+  pnpm-store:

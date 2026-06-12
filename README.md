@@ -103,11 +103,15 @@ Browser
     -> Next.js web
       -> intern Docker-network
         -> FastAPI api:8000
+          -> worldcup-api:3001/v1
+            -> worldcup-postgres:5432
 ```
 
-Kun web-porten publiseres. API-et har ingen public `ports:` i default compose.
+Kun web-porten publiseres. API-et, worldcup-api og Postgres har ingen public `ports:` i default compose.
 
 Static fantasy-data, TV2-priser og mappings er bakt inn i API-imaget. Default compose mounter derfor bare `./data/teams` som persistent volum. Ikke mount hele `./data` over `/app/data` i production, fordi det skjuler CSV-filene som ligger i imaget.
+
+Live-score krever at `worldcup-api` kjører og at API-containeren har `WORLDCUP_API_URL=http://worldcup-api:3001/v1`. Hvis dette mangler, faller API-et tilbake til statisk VM-dump og appen viser kamper uten live-oppdateringer.
 
 ## Lagrede lag
 
@@ -147,11 +151,12 @@ Se logger:
 docker compose logs -f
 ```
 
-Se bare web/API:
+Se bare relevante logger:
 
 ```bash
 docker compose logs -f web
 docker compose logs -f api
+docker compose logs -f worldcup-api
 ```
 
 Stoppe:
@@ -160,11 +165,23 @@ Stoppe:
 docker compose down
 ```
 
-Oppdatere til nyeste image:
+Oppdatere til nyeste images:
 
 ```bash
 docker compose pull
 docker compose up -d
+```
+
+Verifiser live-kjeden etter oppdatering:
+
+```bash
+docker compose ps
+docker compose exec api python - <<'PY'
+import json, urllib.request
+with urllib.request.urlopen('http://worldcup-api:3001/v1/matches?date=2026-06-12') as r:
+    print(json.dumps(json.load(r)[:2], indent=2))
+PY
+curl -sS 'http://localhost:${WEB_PORT:-3000}/api/fixtures?limit=6' | python -m json.tool
 ```
 
 Oppdatere repo-filer også:
