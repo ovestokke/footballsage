@@ -9,18 +9,29 @@ så kun web-porten trenger å eksponeres.
 ```yaml
 services:
   api:
-    # ... som compose.yaml
-    # Ingen ports – API nås internt via Next.js /api route-proxy
+    image: ghcr.io/ovestokke/footballsage-api:latest
+    pull_policy: always
+    env_file:
+      - path: .env
+        required: false
     volumes:
       # Persist kun lagrede lag. Ikke mount hele ./data over /app/data.
       - ./data/teams:/app/data/teams
+    expose:
+      - "8000"
+    restart: unless-stopped
 
   web:
-    # ... som compose.yaml
-    ports:
-      - "3000:3000"
+    image: ghcr.io/ovestokke/footballsage-web:latest
+    pull_policy: always
     environment:
       API_INTERNAL_URL: http://api:8000
+      NEXT_PUBLIC_API_BASE_URL: /api
+    ports:
+      - "3000:3000"
+    depends_on:
+      - api
+    restart: unless-stopped
 ```
 
 ## Volumregel
