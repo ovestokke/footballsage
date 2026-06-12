@@ -11,7 +11,7 @@ FootballSage lar deg importere fantasy-laget ditt fra tekst eller screenshot, sj
 - Lag-sjekk mot fantasy-regler
 - Flere lag lagret på serveren
 - AI-råd via OpenRouter/OpenAI/Anthropic-kompatibel konfig
-- Docker Compose-oppsett uten lokal Python/pnpm-installasjon
+- Ferdigbygde Docker-images på GHCR uten lokal Python/pnpm-installasjon
 - API-et er internt; browseren bruker samme-origin `/api/...`
 
 ## Screenshots
@@ -43,7 +43,8 @@ cd footballsage
 cp example.env .env
 # Rediger .env og fyll inn OPENROUTER_API_KEY eller annen støttet LLM-key.
 
-docker compose up --build
+docker compose pull
+docker compose up
 ```
 
 Åpne:
@@ -84,7 +85,7 @@ WEB_PORT=3000
 Start på annen port:
 
 ```bash
-WEB_PORT=3010 docker compose up --build
+WEB_PORT=3010 docker compose up
 ```
 
 `.env` er gitignoret. Ikke commit API-nøkler.
@@ -93,7 +94,14 @@ Uten LLM-konfig starter appen fortsatt, men Sage-råd og screenshot-OCR vil retu
 
 ## Docker-oppsett
 
-Default `compose.yaml` er ment for enkel produksjonslignende kjøring:
+Default `compose.yaml` bruker ferdigbygde images fra GitHub Container Registry:
+
+```text
+ghcr.io/ovestokke/footballsage-api:latest
+ghcr.io/ovestokke/footballsage-web:latest
+```
+
+Den er ment for enkel produksjonslignende kjøring:
 
 ```text
 Browser
@@ -126,13 +134,15 @@ tar -czf footballsage-teams-backup.tgz data/teams
 Start:
 
 ```bash
-docker compose up --build
+docker compose pull
+docker compose up
 ```
 
 Start i bakgrunn:
 
 ```bash
-docker compose up -d --build
+docker compose pull
+docker compose up -d
 ```
 
 Se logger:
@@ -154,11 +164,19 @@ Stoppe:
 docker compose down
 ```
 
-Oppdatere etter git pull:
+Oppdatere til nyeste image:
+
+```bash
+docker compose pull
+docker compose up -d
+```
+
+Oppdatere repo-filer også:
 
 ```bash
 git pull --recurse-submodules
-docker compose up -d --build
+docker compose pull
+docker compose up -d
 ```
 
 ## Lokal utvikling
