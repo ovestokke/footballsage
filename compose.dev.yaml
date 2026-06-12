@@ -1,4 +1,41 @@
 services:
+  worldcup-postgres:
+    image: postgres:17
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: dev
+      POSTGRES_DB: worldcup
+    ports:
+      - "${WORLDCUP_DB_PORT:-5432}:5432"
+    volumes:
+      - worldcup-pgdata:/var/lib/postgresql/data
+      - ./services/worldcup/db/dump:/docker-entrypoint-initdb.d:ro
+    restart: unless-stopped
+
+  worldcup-api:
+    image: node:24-alpine
+    working_dir: /app/services/worldcup
+    command: sh -c "corepack enable && pnpm install --ignore-workspace && pnpm dev"
+    environment:
+      CI: "true"
+      DATABASE_URL: postgres://postgres:dev@worldcup-postgres:5432/worldcup
+      FOOTBALL_DATA_TOKEN: dev-placeholder
+      LIVE_SYNC_ENABLED: "true"
+      LIVE_SYNC_CRON: "*/30 * * * * *"
+      LINEUPS_SYNC_ENABLED: "false"
+      OFFICIALS_SYNC_ENABLED: "false"
+      PUSH_ENABLED: "false"
+      PORT: "3001"
+    ports:
+      - "${WORLDCUP_API_PORT:-3001}:3001"
+    volumes:
+      - .:/app
+      - /app/services/worldcup/node_modules
+      - pnpm-store:/root/.local/share/pnpm/store
+    depends_on:
+      - worldcup-postgres
+    restart: unless-stopped
+
   api:
     build:
       context: .
@@ -8,11 +45,14 @@ services:
         required: false
     environment:
       API_RELOAD: "1"
+      WORLDCUP_API_URL: http://worldcup-api:3001/v1
     ports:
       - "${API_PORT:-8000}:8000"
     volumes:
       - ./data:/app/data
       - ./apps/api:/app/apps/api
+    depends_on:
+      - worldcup-api
     restart: unless-stopped
 
   web:
@@ -36,3 +76,4 @@ services:
 
 volumes:
   pnpm-store:
+  worldcup-pgdata:

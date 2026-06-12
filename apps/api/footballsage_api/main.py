@@ -116,10 +116,18 @@ class Fixture(BaseModel):
     matchday: int | None
     kickoff_utc: str
     status: str
+    minute: int | None = None
+    home_score: int | None = None
+    away_score: int | None = None
+    home_score_ht: int | None = None
+    away_score_ht: int | None = None
+    home_pens: int | None = None
+    away_pens: int | None = None
     home_team: str | None
     away_team: str | None
     home_team_code: str | None
     away_team_code: str | None
+    venue: str | None = None
 
 
 class TeamImportTextRequest(BaseModel):
@@ -901,10 +909,18 @@ def fixtures(
             matchday=fixture.matchday,
             kickoff_utc=fixture.kickoff_utc,
             status=fixture.status,
+            minute=fixture.minute,
+            home_score=fixture.home_score,
+            away_score=fixture.away_score,
+            home_score_ht=fixture.home_score_ht,
+            away_score_ht=fixture.away_score_ht,
+            home_pens=fixture.home_pens,
+            away_pens=fixture.away_pens,
             home_team=fixture.home_team,
             away_team=fixture.away_team,
             home_team_code=fixture.home_team_code,
             away_team_code=fixture.away_team_code,
+            venue=fixture.venue,
         )
         for fixture in result[:limit]
     ]

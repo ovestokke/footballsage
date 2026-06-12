@@ -5,6 +5,7 @@ import gzip
 import json
 import os
 import re
+import time
 from dataclasses import dataclass
 from functools import lru_cache
 from pathlib import Path
@@ -15,6 +16,7 @@ from urllib.request import Request, urlopen
 ROOT = Path(__file__).resolve().parents[3]
 WORLDCUP_DUMP = ROOT / "services" / "worldcup" / "db" / "dump" / "worldcup.sql.gz"
 WORLDCUP_API_URL = os.environ.get("WORLDCUP_API_URL", "").rstrip("/")
+WORLDCUP_API_CACHE_SECONDS = float(os.environ.get("WORLDCUP_API_CACHE_SECONDS", "5"))
 
 
 @dataclass(frozen=True)
@@ -37,12 +39,21 @@ class WorldCupFixture:
     matchday: int | None
     kickoff_utc: str
     status: str
+    minute: int | None
+    home_score: int | None
+    away_score: int | None
+    home_score_ht: int | None
+    away_score_ht: int | None
+    home_pens: int | None
+    away_pens: int | None
     home_team_id: str | None
     away_team_id: str | None
     home_team: str | None
     away_team: str | None
     home_team_code: str | None
     away_team_code: str | None
+    venue: str | None
+    source_ids: dict[str, str]
 
 
 @dataclass(frozen=True)
@@ -126,6 +137,17 @@ def _json_obj(value: str | None) -> dict[str, Any]:
     return parsed if isinstance(parsed, dict) else {}
 
 
+def _nested_int(obj: dict[str, Any], *path: str) -> int | None:
+    current: Any = obj
+    for key in path:
+        if not isinstance(current, dict):
+            return None
+        current = current.get(key)
+    if current in (None, ""):
+        return None
+    return int(current)
+
+
 def _fetch_api_json(path: str) -> Any:
     request = Request(f"{WORLDCUP_API_URL}{path}", headers={"Accept": "application/json"})
     with urlopen(request, timeout=8) as response:
@@ -154,6 +176,7 @@ def _load_from_api() -> WorldCupData | None:
         )
         for row in teams_json
     ]
+    team_code_by_id = {team.id: team.fifa_code for team in teams}
     fixtures = [
         WorldCupFixture(
             id=row["id"],
@@ -163,12 +186,21 @@ def _load_from_api() -> WorldCupData | None:
             matchday=row.get("matchday"),
             kickoff_utc=row["kickoffUtc"],
             status=row["status"],
+            minute=_nested_int(row, "minute"),
+            home_score=_nested_int(row, "score", "home"),
+            away_score=_nested_int(row, "score", "away"),
+            home_score_ht=_nested_int(row, "score", "homeHt"),
+            away_score_ht=_nested_int(row, "score", "awayHt"),
+            home_pens=_nested_int(row, "score", "homePens"),
+            away_pens=_nested_int(row, "score", "awayPens"),
             home_team_id=(row.get("homeTeam") or {}).get("id"),
             away_team_id=(row.get("awayTeam") or {}).get("id"),
-            home_team=(row.get("homeTeam") or {}).get("name"),
-            away_team=(row.get("awayTeam") or {}).get("name"),
-            home_team_code=None,
-            away_team_code=None,
+            home_team=(row.get("homeTeam") or {}).get("name") or row.get("homePlaceholder"),
+            away_team=(row.get("awayTeam") or {}).get("name") or row.get("awayPlaceholder"),
+            home_team_code=team_code_by_id.get((row.get("homeTeam") or {}).get("id")),
+            away_team_code=team_code_by_id.get((row.get("awayTeam") or {}).get("id")),
+            venue=(row.get("venue") or {}).get("name"),
+            source_ids=row.get("sourceIds") or row.get("source_ids") or {},
         )
         for row in fixtures_json
     ]
@@ -195,10 +227,14 @@ def _load_from_dump() -> WorldCupData:
     teams_by_id = {team.id: team for team in teams}
 
     fixture_rows = _read_copy_table("matches")
+    venue_rows = _read_copy_table("venues")
+    venue_by_id = {str(row["id"]): row for row in venue_rows}
+
     fixtures = []
     for row in fixture_rows:
         home = teams_by_id.get(str(row["home_team_id"])) if row.get("home_team_id") else None
         away = teams_by_id.get(str(row["away_team_id"])) if row.get("away_team_id") else None
+        venue = venue_by_id.get(str(row["venue_id"])) if row.get("venue_id") else None
         fixtures.append(
             WorldCupFixture(
                 id=str(row["id"]),
@@ -208,12 +244,21 @@ def _load_from_dump() -> WorldCupData:
                 matchday=_int_or_none(row.get("matchday")),
                 kickoff_utc=str(row["kickoff_utc"]),
                 status=str(row["status"]),
+                minute=_int_or_none(row.get("minute")),
+                home_score=_int_or_none(row.get("home_score")),
+                away_score=_int_or_none(row.get("away_score")),
+                home_score_ht=_int_or_none(row.get("home_score_ht")),
+                away_score_ht=_int_or_none(row.get("away_score_ht")),
+                home_pens=_int_or_none(row.get("home_pens")),
+                away_pens=_int_or_none(row.get("away_pens")),
                 home_team_id=home.id if home else None,
                 away_team_id=away.id if away else None,
                 home_team=home.name if home else row.get("home_placeholder"),
                 away_team=away.name if away else row.get("away_placeholder"),
                 home_team_code=home.fifa_code if home else None,
                 away_team_code=away.fifa_code if away else None,
+                venue=str(venue["name"]) if venue and venue.get("name") else None,
+                source_ids=_json_obj(row.get("source_ids")),
             )
         )
     fixtures.sort(key=lambda fixture: (fixture.kickoff_utc, fixture.match_number))
@@ -240,9 +285,34 @@ def _load_from_dump() -> WorldCupData:
     return WorldCupData(teams=teams, fixtures=fixtures, players=players)
 
 
+
 @lru_cache(maxsize=1)
+def _load_from_dump_cached() -> WorldCupData:
+    return _load_from_dump()
+
+
+_cached_api_data: WorldCupData | None = None
+_cached_api_at = 0.0
+
+
 def get_worldcup_data() -> WorldCupData:
-    return _load_from_api() or _load_from_dump()
+    global _cached_api_at, _cached_api_data
+
+    if WORLDCUP_API_URL:
+        now = time.monotonic()
+        if _cached_api_data is not None and now - _cached_api_at < WORLDCUP_API_CACHE_SECONDS:
+            return _cached_api_data
+
+        api_data = _load_from_api()
+        if api_data is not None:
+            _cached_api_data = api_data
+            _cached_api_at = now
+            return api_data
+
+        if _cached_api_data is not None:
+            return _cached_api_data
+
+    return _load_from_dump_cached()
 
 
 KNOCKOUT_ROUND_STAGE = {

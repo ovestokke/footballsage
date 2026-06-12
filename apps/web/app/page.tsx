@@ -23,6 +23,7 @@ const sampleTeam = [
 ].join("\n");
 
 type Scene = "team-select" | "import" | "verify" | "analysis";
+type AppMode = "sage" | "matches";
 
 type SavedTeam = {
   id: string;
@@ -170,7 +171,30 @@ type SageAdviceResponse = {
   };
 };
 
+type Fixture = {
+  id: string;
+  match_number: number;
+  stage: string;
+  group: string | null;
+  matchday: number | null;
+  kickoff_utc: string;
+  status: string;
+  minute: number | null;
+  home_score: number | null;
+  away_score: number | null;
+  home_score_ht: number | null;
+  away_score_ht: number | null;
+  home_pens: number | null;
+  away_pens: number | null;
+  home_team: string | null;
+  away_team: string | null;
+  home_team_code: string | null;
+  away_team_code: string | null;
+  venue: string | null;
+};
+
 export default function Home() {
+  const [appMode, setAppMode] = useState<AppMode>("sage");
   const [scene, setScene] = useState<Scene>("team-select");
   const [activeTeamId, setActiveTeamId] = useState<string | null>(null);
   const [teamText, setTeamText] = useState(sampleTeam);
@@ -619,21 +643,32 @@ export default function Home() {
       <header className="app-top compact">
         <div>
           <p className="eyebrow">FootballSage</p>
-          <h1>Få AI-råd til neste fantasy-runde.</h1>
-          <p>Importer laget ditt, bekreft 15 spillere, og spør Sage om bytter, kaptein og problemer før neste runde.</p>
+          <h1>{appMode === "matches" ? "VM-kamper, live og i CET." : "Få AI-råd til neste fantasy-runde."}</h1>
+          <p>
+            {appMode === "matches"
+              ? "Én dag av gangen, live-stilling når datakilden har det, og kampkort som føles som matchday."
+              : "Importer laget ditt, bekreft 15 spillere, og spør Sage om bytter, kaptein og problemer før neste runde."}
+          </p>
         </div>
-        <SceneSteps
-          scene={scene}
-          canVerify={importResult !== null}
-          canAnalyze={confirmedSelections.length > 0}
-          onNavigate={navigateToScene}
-          hasTeams={teams.length > 0}
-        />
+        <div className="top-controls">
+          <ModeTabs appMode={appMode} onChange={setAppMode} />
+          {appMode === "sage" && (
+            <SceneSteps
+              scene={scene}
+              canVerify={importResult !== null}
+              canAnalyze={confirmedSelections.length > 0}
+              onNavigate={navigateToScene}
+              hasTeams={teams.length > 0}
+            />
+          )}
+        </div>
       </header>
 
-      {message && <p className="global-message">{message}</p>}
+      {message && appMode === "sage" && <p className="global-message">{message}</p>}
 
-      {scene === "team-select" && (
+      {appMode === "matches" && <WorldCupMatches />}
+
+      {appMode === "sage" && scene === "team-select" && (
         <section className="scene-card team-select-scene">
           <div className="scene-copy">
             <p className="eyebrow">Dine lag</p>
@@ -677,7 +712,7 @@ export default function Home() {
         </section>
       )}
 
-      {scene === "import" && (
+      {appMode === "sage" && scene === "import" && (
         <section className="scene-card import-scene">
           <div className="scene-copy">
             <p className="eyebrow">Steg 1</p>
@@ -712,7 +747,7 @@ export default function Home() {
         </section>
       )}
 
-      {scene === "verify" && importResult && (
+      {appMode === "sage" && scene === "verify" && importResult && (
         <section className="scene-card verify-scene">
           <div className="verify-header">
             <div>
@@ -843,7 +878,7 @@ export default function Home() {
         </section>
       )}
 
-      {scene === "analysis" && (
+      {appMode === "sage" && scene === "analysis" && (
         <section className="analysis-scene">
           <div className="analysis-toolbar">
             <div>
@@ -907,6 +942,167 @@ export default function Home() {
         </section>
       )}
     </main>
+  );
+}
+
+function ModeTabs({ appMode, onChange }: { appMode: AppMode; onChange: (mode: AppMode) => void }) {
+  return (
+    <nav className="mode-tabs" aria-label="Hovedseksjoner">
+      <button className={appMode === "sage" ? "active" : ""} onClick={() => onChange("sage")} type="button">
+        Sage
+      </button>
+      <button className={appMode === "matches" ? "active" : ""} onClick={() => onChange("matches")} type="button">
+        VM-kamper
+      </button>
+    </nav>
+  );
+}
+
+function WorldCupMatches() {
+  const [fixtures, setFixtures] = useState<Fixture[]>([]);
+  const [selectedDay, setSelectedDay] = useState<string>("");
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+  const [lastUpdated, setLastUpdated] = useState<Date | null>(null);
+
+  async function loadFixtures(signal?: AbortSignal) {
+    setError(null);
+    const response = await fetch(`${apiBase}/fixtures?limit=500`, { signal });
+    if (!response.ok) throw new Error(`Klarte ikke hente kamper (${response.status})`);
+    const payload: Fixture[] = await response.json();
+    setFixtures(payload);
+    setLastUpdated(new Date());
+    setLoading(false);
+  }
+
+  useEffect(() => {
+    const controller = new AbortController();
+    loadFixtures(controller.signal).catch((err: Error) => {
+      if (err.name !== "AbortError") {
+        setError(err.message);
+        setLoading(false);
+      }
+    });
+    return () => controller.abort();
+  }, []);
+
+  const dayKeys = useMemo(() => unique(fixtures.map((fixture) => cetDateKey(fixture.kickoff_utc))), [fixtures]);
+  const todayKey = cetDateKey(new Date().toISOString());
+  const selectedFixtures = useMemo(
+    () => fixtures.filter((fixture) => cetDateKey(fixture.kickoff_utc) === selectedDay),
+    [fixtures, selectedDay],
+  );
+  const liveFixtures = selectedFixtures.filter(isLiveFixture);
+  const hasLiveFixtures = fixtures.some(isLiveFixture);
+
+  useEffect(() => {
+    if (!dayKeys.length || selectedDay) return;
+    setSelectedDay(dayKeys.find((day) => day === todayKey) ?? dayKeys.find((day) => day >= todayKey) ?? dayKeys[0]);
+  }, [dayKeys, selectedDay, todayKey]);
+
+  useEffect(() => {
+    const interval = window.setInterval(() => {
+      loadFixtures().catch((err: Error) => setError(err.message));
+    }, hasLiveFixtures ? 30_000 : 300_000);
+    return () => window.clearInterval(interval);
+  }, [hasLiveFixtures]);
+
+  return (
+    <section className="matches-scene">
+      <div className="scene-card matchday-hero">
+        <div>
+          <p className="eyebrow">Matchday board</p>
+          <h2>{selectedDay ? matchdayTitle(selectedDay) : "VM-kamper"}</h2>
+          <p>Alle klokkeslett vises som CET. Live-stilling oppdateres automatisk når API-et leverer score.</p>
+        </div>
+        <div className="matchday-status">
+          <span className={hasLiveFixtures ? "live-indicator on" : "live-indicator"}>{hasLiveFixtures ? "Live nå" : "Ingen live"}</span>
+          <small>{lastUpdated ? `Oppdatert ${lastUpdated.toLocaleTimeString("nb-NO", { hour: "2-digit", minute: "2-digit" })}` : "Henter feed"}</small>
+          <button className="secondary-button" onClick={() => loadFixtures().catch((err: Error) => setError(err.message))} type="button">
+            Oppdater
+          </button>
+        </div>
+      </div>
+
+      {error && <p className="global-message">{error}</p>}
+
+      <div className="date-rail" aria-label="Velg kampdag">
+        {dayKeys.map((day) => (
+          <button className={day === selectedDay ? "active" : ""} key={day} onClick={() => setSelectedDay(day)} type="button">
+            <span>{shortDayLabel(day, todayKey)}</span>
+            <small>{fixtures.filter((fixture) => cetDateKey(fixture.kickoff_utc) === day).length} kamper</small>
+          </button>
+        ))}
+      </div>
+
+      {loading ? (
+        <section className="panel match-list-panel"><p className="empty">Laster VM-kamper…</p></section>
+      ) : selectedFixtures.length === 0 ? (
+        <section className="panel match-list-panel"><p className="empty">Ingen kamper denne dagen.</p></section>
+      ) : (
+        <section className="match-list-panel">
+          {liveFixtures.length > 0 && (
+            <div className="live-strip">
+              <p className="eyebrow">Nå live</p>
+              <div className="match-list live-list">
+                {liveFixtures.map((fixture) => <MatchCard fixture={fixture} key={`live-${fixture.id}`} />)}
+              </div>
+            </div>
+          )}
+
+          <div className="match-section-title">
+            <div>
+              <p className="eyebrow">Dagens kamper</p>
+              <h3>{selectedFixtures.length} kamper</h3>
+            </div>
+            <span>{selectedDay ? matchdayTitle(selectedDay) : ""}</span>
+          </div>
+          <div className="match-list">
+            {selectedFixtures.map((fixture) => <MatchCard fixture={fixture} key={fixture.id} />)}
+          </div>
+        </section>
+      )}
+    </section>
+  );
+}
+
+function MatchCard({ fixture }: { fixture: Fixture }) {
+  const live = isLiveFixture(fixture);
+  const finished = isFinishedFixture(fixture);
+  const hasScore = fixture.home_score !== null && fixture.away_score !== null;
+  return (
+    <article className={`match-card ${live ? "live" : ""} ${finished ? "finished" : ""}`}>
+      <div className="match-time">
+        <strong>{live ? statusLabel(fixture) : cetTime(fixture.kickoff_utc)}</strong>
+        <span>{live ? `${fixture.minute ?? "—"}'` : "CET"}</span>
+      </div>
+      <div className="match-teams">
+        <TeamLine name={fixture.home_team ?? "TBD"} code={fixture.home_team_code} />
+        <div className="scoreline">
+          {hasScore ? (
+            <strong>{fixture.home_score}–{fixture.away_score}</strong>
+          ) : (
+            <span>vs</span>
+          )}
+          {fixture.home_pens !== null && fixture.away_pens !== null && <small>p. {fixture.home_pens}–{fixture.away_pens}</small>}
+        </div>
+        <TeamLine name={fixture.away_team ?? "TBD"} code={fixture.away_team_code} align="right" />
+      </div>
+      <div className="match-meta">
+        <span>{stageLabel(fixture.stage, fixture.group)}</span>
+        {fixture.venue && <span>{fixture.venue}</span>}
+        <span>{statusLabel(fixture)}</span>
+      </div>
+    </article>
+  );
+}
+
+function TeamLine({ name, code, align = "left" }: { name: string; code: string | null; align?: "left" | "right" }) {
+  return (
+    <div className={`team-line ${align === "right" ? "right" : ""}`}>
+      <strong>{name}</strong>
+      {code && <span>{code}</span>}
+    </div>
   );
 }
 
@@ -1271,6 +1467,79 @@ function readFileAsDataUrl(file: File): Promise<string> {
     reader.onerror = () => reject(reader.error);
     reader.readAsDataURL(file);
   });
+}
+
+function cetDateKey(iso: string) {
+  const parts = new Intl.DateTimeFormat("en-GB", {
+    day: "2-digit",
+    month: "2-digit",
+    timeZone: "Europe/Oslo",
+    year: "numeric",
+  }).formatToParts(new Date(iso));
+  const pick = (type: string) => parts.find((part) => part.type === type)?.value ?? "";
+  return `${pick("year")}-${pick("month")}-${pick("day")}`;
+}
+
+function cetTime(iso: string) {
+  return new Intl.DateTimeFormat("nb-NO", {
+    hour: "2-digit",
+    minute: "2-digit",
+    timeZone: "Europe/Oslo",
+  }).format(new Date(iso));
+}
+
+function matchdayTitle(dayKey: string) {
+  return new Intl.DateTimeFormat("nb-NO", {
+    day: "numeric",
+    month: "long",
+    timeZone: "Europe/Oslo",
+    weekday: "long",
+  }).format(new Date(`${dayKey}T12:00:00Z`));
+}
+
+function shortDayLabel(dayKey: string, todayKey: string) {
+  if (dayKey === todayKey) return "I dag";
+  const tomorrow = new Date(`${todayKey}T12:00:00Z`);
+  tomorrow.setUTCDate(tomorrow.getUTCDate() + 1);
+  if (dayKey === tomorrow.toISOString().slice(0, 10)) return "I morgen";
+  return new Intl.DateTimeFormat("nb-NO", {
+    day: "numeric",
+    month: "short",
+    timeZone: "Europe/Oslo",
+    weekday: "short",
+  }).format(new Date(`${dayKey}T12:00:00Z`));
+}
+
+function isLiveFixture(fixture: Fixture) {
+  return ["live", "ht", "in_play", "first_half", "second_half", "extra_time", "penalties"].includes(fixture.status.toLowerCase());
+}
+
+function isFinishedFixture(fixture: Fixture) {
+  return ["ft", "finished", "awarded"].includes(fixture.status.toLowerCase());
+}
+
+function statusLabel(fixture: Fixture) {
+  const status = fixture.status.toLowerCase();
+  if (status === "live") return "LIVE";
+  if (status === "ht") return "Pause";
+  if (["ft", "finished"].includes(status)) return "Ferdig";
+  if (status === "scheduled") return "Ikke startet";
+  if (status === "postponed") return "Utsatt";
+  if (status === "cancelled") return "Avlyst";
+  return fixture.status;
+}
+
+function stageLabel(stage: string, group: string | null) {
+  if (stage === "group") return group ? `Gruppe ${group}` : "Gruppespill";
+  const labels: Record<string, string> = {
+    r32: "32-delsfinale",
+    r16: "8-delsfinale",
+    qf: "Kvartfinale",
+    sf: "Semifinale",
+    third: "Bronsefinale",
+    final: "Finale",
+  };
+  return labels[stage] ?? stage;
 }
 
 function unique(values: string[]) {
