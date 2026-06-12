@@ -93,6 +93,8 @@ Default `compose.yaml` bruker ferdigbygde images fra GitHub Container Registry:
 ```text
 ghcr.io/ovestokke/footballsage-api:latest
 ghcr.io/ovestokke/footballsage-web:latest
+ghcr.io/ovestokke/footballsage-worldcup-api:latest
+ghcr.io/ovestokke/footballsage-worldcup-db:latest
 ```
 
 Den er ment for enkel produksjonslignende kjøring:
@@ -187,7 +189,7 @@ curl -sS 'http://localhost:${WEB_PORT:-3000}/api/fixtures?limit=6' | python -m j
 Oppdatere repo-filer også:
 
 ```bash
-git pull --recurse-submodules
+git pull
 docker compose pull
 docker compose up -d
 ```

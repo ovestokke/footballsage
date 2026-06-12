@@ -31,6 +31,12 @@ jobs:
           - name: web
             image: footballsage-web
             dockerfile: apps/web/Dockerfile
+          - name: worldcup-api
+            image: footballsage-worldcup-api
+            dockerfile: apps/worldcup-api/Dockerfile
+          - name: worldcup-db
+            image: footballsage-worldcup-db
+            dockerfile: apps/worldcup-db/Dockerfile
 
     steps:
       - name: Checkout

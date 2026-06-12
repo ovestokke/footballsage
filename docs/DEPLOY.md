@@ -16,24 +16,20 @@ så kun web-porten trenger å eksponeres. FootballSage API leser live VM-data fr
 ```yaml
 services:
   worldcup-postgres:
-    image: postgres:17
+    image: ghcr.io/ovestokke/footballsage-worldcup-db:latest
     environment:
       POSTGRES_USER: postgres
       POSTGRES_PASSWORD: ${WORLDCUP_DB_PASSWORD:-dev}
       POSTGRES_DB: worldcup
     volumes:
       - worldcup-pgdata:/var/lib/postgresql/data
-      - ./services/worldcup/db/dump:/docker-entrypoint-initdb.d:ro
     expose:
       - "5432"
     restart: unless-stopped
 
   worldcup-api:
-    image: node:24-alpine
-    working_dir: /app/services/worldcup
-    command: sh -c "corepack enable && pnpm install --ignore-workspace --prod=false && pnpm build && NODE_ENV=production pnpm start:prod"
+    image: ghcr.io/ovestokke/footballsage-worldcup-api:latest
     environment:
-      CI: "true"
       NODE_ENV: production
       DATABASE_URL: postgres://postgres:${WORLDCUP_DB_PASSWORD:-dev}@worldcup-postgres:5432/worldcup
       # Upstream krever ikke-tom verdi ved startup selv når football-data jobs er av.
@@ -45,10 +41,6 @@ services:
       OFFICIALS_SYNC_ENABLED: "false"
       PUSH_ENABLED: "false"
       PORT: "3001"
-    volumes:
-      - .:/app
-      - /app/services/worldcup/node_modules
-      - pnpm-store:/root/.local/share/pnpm/store
     expose:
       - "3001"
     depends_on:
@@ -84,7 +76,6 @@ services:
 
 volumes:
   worldcup-pgdata:
-  pnpm-store:
 ```
 
 ## Volumregel
