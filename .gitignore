@@ -236,3 +236,5 @@ dist/
 *.sqlite3
 data/snapshots/*.json
 data/teams/*.json
+
+.DS_Store

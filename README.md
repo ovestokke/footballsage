@@ -14,6 +14,20 @@ FootballSage lar deg importere fantasy-laget ditt fra tekst eller screenshot, sj
 - Docker Compose-oppsett uten lokal Python/pnpm-installasjon
 - API-et er internt; browseren bruker samme-origin `/api/...`
 
+## Screenshots
+
+### Start / lagvelger
+
+![FootballSage startside med lagvelger](docs/Start.png)
+
+### Import og bekreftelse
+
+![Import av fantasy-lag i FootballSage](docs/import.png)
+
+### AI-råd fra Sage
+
+![AI-råd fra Sage med bytte- og kapteinsforslag](docs/AI-advice.png)
+
 ## Quickstart
 
 Krever kun:

@@ -193,6 +193,9 @@ export default function Home() {
   const [editingTeamId, setEditingTeamId] = useState<string | null>(null);
   const [renamingTeamId, setRenamingTeamId] = useState<string | null>(null);
   const [renameValue, setRenameValue] = useState("");
+  const [playerCatalog, setPlayerCatalog] = useState<Player[]>([]);
+  const [catalogLoading, setCatalogLoading] = useState(false);
+  const [manualPlayerQuery, setManualPlayerQuery] = useState("");
 
   const activeTeam = useMemo(() => teams.find((t) => t.id === activeTeamId) ?? null, [teams, activeTeamId]);
 
@@ -207,6 +210,26 @@ export default function Home() {
     if (!importResult) return "tv2" as const;
     return importResult.provider as "tv2" | "fifa_official";
   }, [importResult]);
+
+  useEffect(() => {
+    if (scene !== "verify" || !importResult) return;
+    const controller = new AbortController();
+    const params = new URLSearchParams({ provider: parsedProvider, round: String(round), limit: "5000" });
+    setCatalogLoading(true);
+    fetch(`${apiBase}/players?${params}`, { signal: controller.signal })
+      .then((response) => {
+        if (!response.ok) throw new Error(`Klarte ikke hente spillerkatalog (${response.status})`);
+        return response.json();
+      })
+      .then((players: Player[]) => setPlayerCatalog(players))
+      .catch((error) => {
+        if (error instanceof DOMException && error.name === "AbortError") return;
+        setMessage(error instanceof Error ? error.message : "Klarte ikke hente spillerkatalog");
+      })
+      .finally(() => setCatalogLoading(false));
+    return () => controller.abort();
+  }, [scene, importResult?.provider, parsedProvider, round]);
+
   const selectedDraftIds = useMemo(() => unique(Object.values(draftSelections)), [draftSelections]);
   const selectedDraftCount = selectedDraftIds.length;
   const starterCount = selectedDraftIds.filter((playerId) => draftLineup[playerId]?.role !== "bench").length;
@@ -215,8 +238,27 @@ export default function Home() {
   const viceCaptainCount = selectedDraftIds.filter((playerId) => draftLineup[playerId]?.is_vice_captain).length;
   const captainId = selectedDraftIds.find((playerId) => draftLineup[playerId]?.is_captain);
   const viceCaptainId = selectedDraftIds.find((playerId) => draftLineup[playerId]?.is_vice_captain);
-  const selectedDraftIsConfirmable = selectedDraftCount === squadSize && starterCount === 11 && benchCount === 4 && captainCount === 1 && viceCaptainCount === 1 && captainId !== viceCaptainId;
+  const validationErrors = useMemo(() => {
+    const errors: string[] = [];
+    if (selectedDraftCount !== squadSize) errors.push(`Velg nøyaktig ${squadSize} spillere (${selectedDraftCount}/${squadSize}).`);
+    if (starterCount !== 11) errors.push(`Sett nøyaktig 11 aktive spillere (${starterCount}/11).`);
+    if (benchCount !== 4) errors.push(`Sett nøyaktig 4 på benk (${benchCount}/4).`);
+    if (captainCount !== 1) errors.push(`Velg nøyaktig én kaptein (${captainCount}/1).`);
+    if (viceCaptainCount !== 1) errors.push(`Velg nøyaktig én vicekaptein (${viceCaptainCount}/1).`);
+    if (captainId && viceCaptainId && captainId === viceCaptainId) errors.push("Kaptein og vicekaptein kan ikke være samme spiller.");
+    return errors;
+  }, [benchCount, captainCount, captainId, selectedDraftCount, starterCount, viceCaptainCount, viceCaptainId]);
+  const selectedDraftIsConfirmable = validationErrors.length === 0;
   const selectedDraftPlayers = useMemo(() => selectedDraftIds.map((playerId) => findDraftOption(importResult, playerId)).filter(Boolean) as ImportPlayerOption[], [importResult, selectedDraftIds]);
+  const manualPlayerResults = useMemo(() => {
+    const query = normalizeSearch(manualPlayerQuery);
+    if (query.length < 2) return [];
+    const selected = new Set(selectedDraftIds);
+    return playerCatalog
+      .filter((player) => !selected.has(player.player_id))
+      .filter((player) => normalizeSearch(`${player.name} ${player.team} ${player.team_abbr} ${player.position}`).includes(query))
+      .slice(0, 8);
+  }, [manualPlayerQuery, playerCatalog, selectedDraftIds]);
 
   useEffect(() => {
     setSageAdvice(null);
@@ -543,6 +585,35 @@ export default function Home() {
     });
   }
 
+  function addManualPlayer(player: Player) {
+    if (!importResult) return;
+    if (selectedDraftIds.includes(player.player_id)) return;
+    if (selectedDraftCount >= squadSize) {
+      setMessage("Troppen har allerede 15 spillere. Sett en spiller til ‘Ikke bruk’ før du legger til en ny.");
+      return;
+    }
+
+    const option = playerToImportOption(player);
+    const nextIndex = importResult.candidates.length;
+    const role = selectedDraftCount < 11 ? "starter" : "bench";
+    const candidate: ImportCandidate = {
+      raw_text: `Manuelt: ${player.name}`,
+      status: "matched",
+      confidence: 1,
+      match: option,
+      alternatives: [option],
+      suggested_role: role,
+      is_captain: false,
+      is_vice_captain: false,
+    };
+
+    setImportResult({ ...importResult, candidates: [...importResult.candidates, candidate] });
+    setDraftSelections((current) => ({ ...current, [nextIndex]: player.player_id }));
+    setDraftLineup((current) => ({ ...current, [player.player_id]: { role, is_captain: false, is_vice_captain: false } }));
+    setManualPlayerQuery("");
+    setMessage(null);
+  }
+
   return (
     <main className="app-shell">
       <header className="app-top compact">
@@ -567,7 +638,7 @@ export default function Home() {
           <div className="scene-copy">
             <p className="eyebrow">Dine lag</p>
             <h2>Velg lag eller opprett nytt</h2>
-            <p>Hvert lag lagres lokalt i nettleseren. Du kan ha flere lag samtidig – for eksempel ett til VM-liga og ett til venneliga.</p>
+            <p>Hvert lag lagres på serveren. Du kan ha flere lag samtidig – for eksempel ett til VM-liga og ett til venneliga.</p>
           </div>
 
           {teams.length > 0 ? (
@@ -655,6 +726,37 @@ export default function Home() {
             </div>
           </div>
 
+          <section className="manual-player-panel">
+            <div>
+              <h3>Legg til spiller manuelt</h3>
+              <p>Søk i spillerkatalogen hvis OCR/import mangler noen.</p>
+            </div>
+            <div className="manual-player-search">
+              <input
+                placeholder="Søk navn, land eller posisjon"
+                value={manualPlayerQuery}
+                onChange={(event) => setManualPlayerQuery(event.target.value)}
+              />
+              <span>{catalogLoading ? "Laster katalog…" : selectedDraftCount >= squadSize ? "Troppen er full" : `${playerCatalog.length} spillere`}</span>
+            </div>
+            {manualPlayerResults.length > 0 && (
+              <div className="manual-player-results">
+                {manualPlayerResults.map((player) => (
+                  <button
+                    className="manual-player-result"
+                    disabled={selectedDraftCount >= squadSize}
+                    key={player.player_id}
+                    onClick={() => addManualPlayer(player)}
+                    type="button"
+                  >
+                    <strong>{player.name}</strong>
+                    <span>{player.team_abbr} · {player.position} · {player.price.toFixed(1)}m</span>
+                  </button>
+                ))}
+              </div>
+            )}
+          </section>
+
           <div className="verify-list clean-list">
             {visibleCandidates.map((candidate) => {
               const index = importResult.candidates.indexOf(candidate);
@@ -722,6 +824,15 @@ export default function Home() {
                 {ignoredCandidates.map((candidate, index) => <li key={`${candidate.raw_text}-${index}`}>{candidate.raw_text}</li>)}
               </ul>
             </details>
+          )}
+
+          {validationErrors.length > 0 && (
+            <section className="validation-panel" aria-live="polite">
+              <h3>Laget kan ikke lagres ennå</h3>
+              <ul>
+                {validationErrors.map((error) => <li key={error}>{error}</li>)}
+              </ul>
+            </section>
           )}
 
           <div className="scene-actions">
@@ -1135,6 +1246,22 @@ function findDraftOption(importResult: ImportResponse | null, playerId: string) 
     if (candidate.match?.player_id === playerId) return candidate.match;
   }
   return null;
+}
+
+function playerToImportOption(player: Player): ImportPlayerOption {
+  return {
+    player_id: player.player_id,
+    name: player.name,
+    team: player.team,
+    team_abbr: player.team_abbr,
+    position: player.position,
+    price: player.price,
+    worldcup_player_id: player.worldcup_player_id,
+  };
+}
+
+function normalizeSearch(value: string) {
+  return value.normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase().trim();
 }
 
 function readFileAsDataUrl(file: File): Promise<string> {
