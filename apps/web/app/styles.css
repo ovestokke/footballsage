@@ -512,7 +512,7 @@ select, input {
   padding-bottom: 14px;
 }
 .sage-answer h4 { font-family: var(--font-display); font-size: 1.45rem; letter-spacing: -0.03em; margin-bottom: 6px; }
-.sage-answer header p { color: var(--text); line-height: 1.5; margin-bottom: 0; }
+.sage-answer header p { color: var(--text); line-height: 1.5; margin-bottom: 0; overflow-wrap: break-word; }
 .sage-answer header span {
   background: var(--accent-soft);
   border-radius: 999px;
@@ -614,6 +614,8 @@ select, input {
   .manual-player-search, .manual-player-results { grid-template-columns: 1fr; }
   .manual-player-search span { white-space: normal; }
   .summary-grid, .verify-row, .lineup-row { grid-template-columns: 1fr; }
+  .sage-answer > header { grid-template-columns: 1fr; }
+  .sage-answer header span { white-space: normal; }
   .squad-row { grid-template-columns: 1fr 74px 48px; }
   .squad-row span:nth-of-type(3), .squad-row em { grid-column: 1 / -1; }
 }
