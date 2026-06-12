@@ -24,6 +24,7 @@ const sampleTeam = [
 
 type Scene = "team-select" | "import" | "verify" | "analysis";
 type AppMode = "sage" | "matches";
+type MatchdayJump = { day: string; fixtureId: string } | null;
 
 type SavedTeam = {
   id: string;
@@ -75,7 +76,21 @@ type Player = {
   status: string;
   expected_points: number;
   reasons: string[];
-  next_fixture: { opponent_code: string | null; difficulty: number | null; kickoff_utc: string } | null;
+  next_fixture: {
+    id: string;
+    match_number: number;
+    stage: string;
+    matchday: number | null;
+    kickoff_utc: string;
+    status: string;
+    minute: number | null;
+    home_score: number | null;
+    away_score: number | null;
+    opponent: string | null;
+    opponent_code: string | null;
+    venue: string | null;
+    difficulty: number | null;
+  } | null;
 };
 
 type ImportPlayerOption = Pick<Player, "player_id" | "name" | "team" | "team_abbr" | "position" | "price" | "worldcup_player_id">;
@@ -195,6 +210,7 @@ type Fixture = {
 
 export default function Home() {
   const [appMode, setAppMode] = useState<AppMode>("sage");
+  const [matchdayJump, setMatchdayJump] = useState<MatchdayJump>(null);
   const [scene, setScene] = useState<Scene>("team-select");
   const [activeTeamId, setActiveTeamId] = useState<string | null>(null);
   const [teamText, setTeamText] = useState(sampleTeam);
@@ -222,6 +238,12 @@ export default function Home() {
   const [manualPlayerQuery, setManualPlayerQuery] = useState("");
 
   const activeTeam = useMemo(() => teams.find((t) => t.id === activeTeamId) ?? null, [teams, activeTeamId]);
+
+  function openFixtureOverview(fixture: NonNullable<Player["next_fixture"]>) {
+    setMatchdayJump({ day: cetDateKey(fixture.kickoff_utc), fixtureId: fixture.id });
+    setAppMode("matches");
+    window.setTimeout(() => window.scrollTo({ top: 0, behavior: "smooth" }), 0);
+  }
 
   useEffect(() => {
     apiLoadTeams().then(setTeams);
@@ -666,7 +688,7 @@ export default function Home() {
 
       {message && appMode === "sage" && <p className="global-message">{message}</p>}
 
-      {appMode === "matches" && <WorldCupMatches />}
+      {appMode === "matches" && <WorldCupMatches jump={matchdayJump} />}
 
       {appMode === "sage" && scene === "team-select" && (
         <section className="scene-card team-select-scene">
@@ -918,7 +940,7 @@ export default function Home() {
               </div>
               <span>Vis/skjul</span>
             </summary>
-            <SquadByPosition lineup={analysis?.lineup ?? []} eliminatedIds={eliminatedIds(analysis)} />
+            <SquadByPosition lineup={analysis?.lineup ?? []} eliminatedIds={eliminatedIds(analysis)} onOpenFixture={openFixtureOverview} />
           </details>
 
           <section className="ai-workspace">
@@ -958,7 +980,7 @@ function ModeTabs({ appMode, onChange }: { appMode: AppMode; onChange: (mode: Ap
   );
 }
 
-function WorldCupMatches() {
+function WorldCupMatches({ jump }: { jump: MatchdayJump }) {
   const [fixtures, setFixtures] = useState<Fixture[]>([]);
   const [selectedDay, setSelectedDay] = useState<string>("");
   const [loading, setLoading] = useState(true);
@@ -994,6 +1016,11 @@ function WorldCupMatches() {
   );
   const liveFixtures = selectedFixtures.filter(isLiveFixture);
   const hasLiveFixtures = fixtures.some(isLiveFixture);
+  const hasKickoffNearby = fixtures.some(isKickoffNearby);
+
+  useEffect(() => {
+    if (jump?.day) setSelectedDay(jump.day);
+  }, [jump?.day]);
 
   useEffect(() => {
     if (!dayKeys.length || selectedDay) return;
@@ -1001,11 +1028,16 @@ function WorldCupMatches() {
   }, [dayKeys, selectedDay, todayKey]);
 
   useEffect(() => {
+    if (!jump?.fixtureId || selectedDay !== jump.day) return;
+    window.setTimeout(() => document.getElementById(`fixture-${jump.fixtureId}`)?.scrollIntoView({ behavior: "smooth", block: "center" }), 80);
+  }, [fixtures.length, jump?.day, jump?.fixtureId, selectedDay]);
+
+  useEffect(() => {
     const interval = window.setInterval(() => {
       loadFixtures().catch((err: Error) => setError(err.message));
-    }, hasLiveFixtures ? 30_000 : 300_000);
+    }, hasLiveFixtures || hasKickoffNearby ? 30_000 : 300_000);
     return () => window.clearInterval(interval);
-  }, [hasLiveFixtures]);
+  }, [hasKickoffNearby, hasLiveFixtures]);
 
   return (
     <section className="matches-scene">
@@ -1013,7 +1045,7 @@ function WorldCupMatches() {
         <div>
           <p className="eyebrow">Matchday board</p>
           <h2>{selectedDay ? matchdayTitle(selectedDay) : "VM-kamper"}</h2>
-          <p>Alle klokkeslett vises som CET. Live-stilling oppdateres automatisk når API-et leverer score.</p>
+          <p>Alle klokkeslett vises som CET. Live-stilling oppdateres automatisk — ekstra raskt rundt avspark.</p>
         </div>
         <div className="matchday-status">
           <span className={hasLiveFixtures ? "live-indicator on" : "live-indicator"}>{hasLiveFixtures ? "Live nå" : "Ingen live"}</span>
@@ -1045,7 +1077,7 @@ function WorldCupMatches() {
             <div className="live-strip">
               <p className="eyebrow">Nå live</p>
               <div className="match-list live-list">
-                {liveFixtures.map((fixture) => <MatchCard fixture={fixture} key={`live-${fixture.id}`} />)}
+                {liveFixtures.map((fixture) => <MatchCard fixture={fixture} focused={fixture.id === jump?.fixtureId} domId={`fixture-live-${fixture.id}`} key={`live-${fixture.id}`} />)}
               </div>
             </div>
           )}
@@ -1058,7 +1090,7 @@ function WorldCupMatches() {
             <span>{selectedDay ? matchdayTitle(selectedDay) : ""}</span>
           </div>
           <div className="match-list">
-            {selectedFixtures.map((fixture) => <MatchCard fixture={fixture} key={fixture.id} />)}
+            {selectedFixtures.map((fixture) => <MatchCard fixture={fixture} focused={fixture.id === jump?.fixtureId} key={fixture.id} />)}
           </div>
         </section>
       )}
@@ -1066,12 +1098,12 @@ function WorldCupMatches() {
   );
 }
 
-function MatchCard({ fixture }: { fixture: Fixture }) {
+function MatchCard({ fixture, focused = false, domId = `fixture-${fixture.id}` }: { fixture: Fixture; focused?: boolean; domId?: string }) {
   const live = isLiveFixture(fixture);
   const finished = isFinishedFixture(fixture);
   const hasScore = fixture.home_score !== null && fixture.away_score !== null;
   return (
-    <article className={`match-card ${live ? "live" : ""} ${finished ? "finished" : ""}`}>
+    <article className={`match-card ${live ? "live" : ""} ${finished ? "finished" : ""} ${focused ? "focused" : ""}`} id={domId}>
       <div className="match-time">
         <strong>{live ? statusLabel(fixture) : cetTime(fixture.kickoff_utc)}</strong>
         <span>{live ? `${fixture.minute ?? "—"}'` : "CET"}</span>
@@ -1155,7 +1187,15 @@ function PanelHeader({ title, subtitle }: { title: string; subtitle: string }) {
   return <header className="panel-header"><h3>{title}</h3><p>{subtitle}</p></header>;
 }
 
-function SquadByPosition({ lineup, eliminatedIds }: { lineup: TeamLineupPlayer[]; eliminatedIds: Set<string> }) {
+function SquadByPosition({
+  lineup,
+  eliminatedIds,
+  onOpenFixture,
+}: {
+  lineup: TeamLineupPlayer[];
+  eliminatedIds: Set<string>;
+  onOpenFixture: (fixture: NonNullable<Player["next_fixture"]>) => void;
+}) {
   const positions: Array<[Player["position"], string]> = [["GK", "Keepere"], ["DEF", "Forsvar"], ["MID", "Midtbane"], ["FWD", "Angrep"]];
   if (!lineup.length) return <p className="empty">Ingen analyse ennå.</p>;
   return (
@@ -1173,7 +1213,7 @@ function SquadByPosition({ lineup, eliminatedIds }: { lineup: TeamLineupPlayer[]
                   <strong>{player.name}</strong>
                   <span>{line.role === "starter" ? "Starter" : "Benk"}{line.is_captain ? " · C" : line.is_vice_captain ? " · VC" : ""}</span>
                   <span>{player.team_abbr}</span>
-                  <span>{player.next_fixture?.opponent_code ? `mot ${player.next_fixture.opponent_code}` : "ingen kamp"}</span>
+                  <NextFixtureBadge fixture={player.next_fixture} onOpenFixture={onOpenFixture} />
                   <em>{playerLabel(player, eliminated)}</em>
                 </div>
               );
@@ -1182,6 +1222,45 @@ function SquadByPosition({ lineup, eliminatedIds }: { lineup: TeamLineupPlayer[]
         );
       })}
     </div>
+  );
+}
+
+function NextFixtureBadge({
+  fixture,
+  onOpenFixture,
+}: {
+  fixture: Player["next_fixture"];
+  onOpenFixture: (fixture: NonNullable<Player["next_fixture"]>) => void;
+}) {
+  if (!fixture) {
+    return <span className="next-fixture-badge empty-fixture">Ingen kamp</span>;
+  }
+
+  const status = fixture.status.toLowerCase();
+  const hasScore = fixture.home_score !== null && fixture.away_score !== null;
+  const difficulty = fixture.difficulty ?? 0;
+  const opponent = fixture.opponent_code ?? fixture.opponent ?? "TBD";
+
+  return (
+    <button
+      className={`next-fixture-badge ${kickoffUrgency(fixture.kickoff_utc)} difficulty-${difficulty}`}
+      onClick={() => onOpenFixture(fixture)}
+      title={`${nextFixtureTitle(fixture)} · Åpne i VM-kamper`}
+      type="button"
+    >
+      <span className="fixture-when">
+        <strong>{shortKickoffDay(fixture.kickoff_utc)}</strong>
+        <small>{cetTime(fixture.kickoff_utc)}</small>
+      </span>
+      <span className="fixture-vs">mot {opponent}</span>
+      {isLiveFixtureStatus(status) ? (
+        <span className="fixture-chip live">{fixture.minute ?? "—"}'</span>
+      ) : hasScore && isFinishedFixtureStatus(status) ? (
+        <span className="fixture-chip score">{fixture.home_score}–{fixture.away_score}</span>
+      ) : difficulty ? (
+        <span className="fixture-chip">FDR {difficulty}</span>
+      ) : null}
+    </button>
   );
 }
 
@@ -1511,11 +1590,25 @@ function shortDayLabel(dayKey: string, todayKey: string) {
 }
 
 function isLiveFixture(fixture: Fixture) {
-  return ["live", "ht", "in_play", "first_half", "second_half", "extra_time", "penalties"].includes(fixture.status.toLowerCase());
+  return isLiveFixtureStatus(fixture.status);
 }
 
 function isFinishedFixture(fixture: Fixture) {
-  return ["ft", "finished", "awarded"].includes(fixture.status.toLowerCase());
+  return isFinishedFixtureStatus(fixture.status);
+}
+
+function isLiveFixtureStatus(status: string) {
+  return ["live", "ht", "in_play", "first_half", "second_half", "extra_time", "penalties"].includes(status.toLowerCase());
+}
+
+function isFinishedFixtureStatus(status: string) {
+  return ["ft", "finished", "awarded"].includes(status.toLowerCase());
+}
+
+function isKickoffNearby(fixture: Fixture) {
+  if (isFinishedFixture(fixture)) return false;
+  const diffMinutes = (new Date(fixture.kickoff_utc).getTime() - Date.now()) / 60000;
+  return diffMinutes >= -20 && diffMinutes <= 20;
 }
 
 function statusLabel(fixture: Fixture) {
@@ -1527,6 +1620,47 @@ function statusLabel(fixture: Fixture) {
   if (status === "postponed") return "Utsatt";
   if (status === "cancelled") return "Avlyst";
   return fixture.status;
+}
+
+function shortKickoffDay(iso: string) {
+  const dayKey = cetDateKey(iso);
+  const todayKey = cetDateKey(new Date().toISOString());
+  if (dayKey === todayKey) return "I dag";
+
+  const tomorrow = new Date(`${todayKey}T12:00:00Z`);
+  tomorrow.setUTCDate(tomorrow.getUTCDate() + 1);
+  if (dayKey === tomorrow.toISOString().slice(0, 10)) return "I morgen";
+
+  return new Intl.DateTimeFormat("nb-NO", {
+    day: "numeric",
+    month: "short",
+    timeZone: "Europe/Oslo",
+    weekday: "short",
+  }).format(new Date(iso));
+}
+
+function kickoffUrgency(iso: string) {
+  const kickoffMs = new Date(iso).getTime();
+  const diffHours = (kickoffMs - Date.now()) / 36e5;
+  if (diffHours < 0) return "played";
+  if (diffHours <= 6) return "soon";
+  if (diffHours <= 36) return "next-up";
+  return "later";
+}
+
+function nextFixtureTitle(fixture: NonNullable<Player["next_fixture"]>) {
+  const date = new Intl.DateTimeFormat("nb-NO", {
+    day: "numeric",
+    hour: "2-digit",
+    minute: "2-digit",
+    month: "long",
+    timeZone: "Europe/Oslo",
+    weekday: "long",
+  }).format(new Date(fixture.kickoff_utc));
+  const opponent = fixture.opponent ?? fixture.opponent_code ?? "TBD";
+  const stage = stageLabel(fixture.stage, null);
+  const venue = fixture.venue ? ` · ${fixture.venue}` : "";
+  return `${stage}: mot ${opponent} · ${date}${venue}`;
 }
 
 function stageLabel(stage: string, group: string | null) {

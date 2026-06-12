@@ -74,8 +74,13 @@ class FixtureSummary(BaseModel):
     stage: str
     matchday: int | None
     kickoff_utc: str
+    status: str
+    minute: int | None = None
+    home_score: int | None = None
+    away_score: int | None = None
     opponent: str | None
     opponent_code: str | None
+    venue: str | None = None
     difficulty: int | None = Field(default=None, ge=1, le=5)
 
 
@@ -323,8 +328,13 @@ def fixture_summary(team_code: str, round_id: int) -> FixtureSummary | None:
         stage=fixture.stage,
         matchday=fixture.matchday,
         kickoff_utc=fixture.kickoff_utc,
+        status=fixture.status,
+        minute=fixture.minute,
+        home_score=fixture.home_score,
+        away_score=fixture.away_score,
         opponent=opponent.name if opponent else None,
         opponent_code=opponent.fifa_code if opponent else None,
+        venue=fixture.venue,
         difficulty=difficulty,
     )
 

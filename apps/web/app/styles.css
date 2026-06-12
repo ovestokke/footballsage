@@ -468,7 +468,7 @@ select, input {
   border-bottom: 1px solid var(--border);
   display: grid;
   gap: 10px;
-  grid-template-columns: minmax(220px, 1fr) 110px 64px minmax(110px, 0.4fr) 74px;
+  grid-template-columns: minmax(190px, 1fr) 108px 58px minmax(240px, 0.8fr) 68px;
   padding: 10px 0;
 }
 .squad-row:last-child { border-bottom: 0; }
@@ -478,6 +478,93 @@ select, input {
 .squad-row.warn em { color: var(--warn); }
 .squad-row.bad { box-shadow: inset 4px 0 0 var(--danger); padding-left: 10px; }
 .squad-row.bad em { color: var(--danger); font-weight: 800; }
+.next-fixture-badge {
+  align-items: center;
+  background:
+    linear-gradient(135deg, rgba(255, 253, 247, 0.92), rgba(235, 230, 218, 0.62));
+  border: 1px solid var(--border);
+  border-radius: 16px;
+  color: var(--text);
+  display: grid;
+  gap: 8px;
+  grid-template-columns: minmax(70px, auto) 1fr auto;
+  min-height: 44px;
+  padding: 7px 9px;
+  text-align: left;
+  width: 100%;
+}
+button.next-fixture-badge:hover:not(:disabled) {
+  background: linear-gradient(135deg, #fff8df, #e8f3e5);
+  border-color: rgba(15, 107, 61, 0.38);
+  color: var(--text);
+  transform: translateY(-1px);
+}
+.next-fixture-badge.soon,
+.next-fixture-badge.next-up {
+  background: linear-gradient(135deg, #fff8df, #eef6e8);
+  border-color: rgba(200, 162, 58, 0.5);
+}
+.next-fixture-badge.played { opacity: 0.82; }
+.next-fixture-badge.empty-fixture {
+  background: #fbf9f3;
+  color: var(--muted);
+  display: inline-flex;
+  font-weight: 800;
+  justify-content: center;
+  width: 100%;
+}
+.fixture-when {
+  border-right: 1px solid var(--border);
+  display: grid;
+  line-height: 1;
+  padding-right: 8px;
+}
+.fixture-when strong {
+  color: var(--text);
+  font-size: 0.76rem;
+  letter-spacing: -0.02em;
+  white-space: nowrap;
+}
+.fixture-when small {
+  color: var(--accent);
+  font-family: var(--font-mono);
+  font-size: 0.86rem;
+  font-weight: 900;
+  margin-top: 3px;
+}
+.fixture-vs {
+  color: var(--text) !important;
+  font-size: 0.9rem;
+  font-weight: 850;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.fixture-chip {
+  background: var(--accent-soft);
+  border: 1px solid rgba(15, 107, 61, 0.18);
+  border-radius: 999px;
+  color: var(--accent);
+  font-family: var(--font-mono);
+  font-size: 0.68rem;
+  font-weight: 900;
+  padding: 4px 6px;
+  white-space: nowrap;
+}
+.fixture-chip.live {
+  animation: livePulse 1.8s ease-in-out infinite;
+  background: var(--danger-bg);
+  border-color: rgba(166, 53, 37, 0.24);
+  color: var(--danger);
+}
+.fixture-chip.score { background: #f5efe0; color: var(--text); }
+.difficulty-4 .fixture-chip,
+.difficulty-5 .fixture-chip { background: var(--warn-bg); border-color: rgba(138, 90, 0, 0.2); color: var(--warn); }
+@keyframes livePulse {
+  0%, 100% { box-shadow: 0 0 0 0 rgba(166, 53, 37, 0.18); }
+  50% { box-shadow: 0 0 0 4px rgba(166, 53, 37, 0); }
+}
 
 .decision-stack { display: grid; gap: 12px; }
 .issue-card,
@@ -728,6 +815,26 @@ select, input {
   color: #fffdf7;
 }
 .match-card.finished { opacity: 0.84; }
+.match-card.focused {
+  border-color: var(--gold);
+  box-shadow: 0 0 0 3px rgba(200, 162, 58, 0.24), 0 20px 44px rgba(20, 25, 20, 0.16);
+  opacity: 1;
+}
+.match-card.focused::after {
+  background: var(--gold);
+  border-radius: 999px;
+  color: var(--text);
+  content: "Fra Sage";
+  font-family: var(--font-mono);
+  font-size: 0.66rem;
+  font-weight: 900;
+  letter-spacing: 0.08em;
+  padding: 5px 7px;
+  position: absolute;
+  right: 12px;
+  text-transform: uppercase;
+  top: 10px;
+}
 .match-time {
   align-content: center;
   background: #fbf9f3;
@@ -841,6 +948,6 @@ select, input {
   .date-rail button { min-width: 102px; }
   .sage-answer > header { grid-template-columns: 1fr; }
   .sage-answer header span { white-space: normal; }
-  .squad-row { grid-template-columns: 1fr 74px 48px; }
-  .squad-row span:nth-of-type(3), .squad-row em { grid-column: 1 / -1; }
+  .squad-row { grid-template-columns: minmax(0, 1fr) auto auto; }
+  .squad-row .next-fixture-badge, .squad-row em { grid-column: 1 / -1; }
 }
