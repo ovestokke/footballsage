@@ -10,10 +10,8 @@ så kun web-porten trenger å eksponeres.
 services:
   api:
     image: ghcr.io/ovestokke/footballsage-api:latest
-    pull_policy: always
     env_file:
-      - path: .env
-        required: false
+      - .env
     volumes:
       # Persist kun lagrede lag. Ikke mount hele ./data over /app/data.
       - ./data/teams:/app/data/teams
@@ -23,7 +21,6 @@ services:
 
   web:
     image: ghcr.io/ovestokke/footballsage-web:latest
-    pull_policy: always
     environment:
       API_INTERNAL_URL: http://api:8000
       NEXT_PUBLIC_API_BASE_URL: /api
