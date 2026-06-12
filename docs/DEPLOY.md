@@ -11,6 +11,9 @@ services:
   api:
     # ... som compose.yaml
     # Ingen ports – API nås internt via Next.js /api route-proxy
+    volumes:
+      # Persist kun lagrede lag. Ikke mount hele ./data over /app/data.
+      - ./data/teams:/app/data/teams
 
   web:
     # ... som compose.yaml
@@ -18,6 +21,29 @@ services:
       - "3000:3000"
     environment:
       API_INTERNAL_URL: http://api:8000
+```
+
+## Volumregel
+
+API-imaget inneholder statiske CSV-filer for priser/mappings under `/app/data`.
+Mount derfor bare teams-mappen:
+
+```yaml
+volumes:
+  - ./data/teams:/app/data/teams
+```
+
+Ikke bruk:
+
+```yaml
+volumes:
+  - ./data:/app/data
+```
+
+Det skjuler de innebygde CSV-filene og gir feil som:
+
+```text
+Missing /app/data/tv2-prices/world-cup-2026-tv2.csv
 ```
 
 ## .env
@@ -58,6 +84,7 @@ LAN-IP, Tailscale og offentlig domene.
 
 - [ ] `.env`: `NEXT_PUBLIC_API_BASE_URL=/api`
 - [ ] compose: kun web-port eksponert, `API_INTERNAL_URL=http://api:8000`
+- [ ] compose: API-volum er `./data/teams:/app/data/teams`, ikke `./data:/app/data`
 - [ ] Caddy: subdomene → `192.168.1.230:3000`
 - [ ] Authelia: legg til `import authelia_middleware` om ønsket
 - [ ] Åpne `https://footballsage.vstokke.com` → team-select vises med CSS

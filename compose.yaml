@@ -6,7 +6,9 @@ services:
       - path: .env
         required: false
     volumes:
-      - ./data:/app/data
+      # Persist saved teams only. Static price/mapping data is baked into the image.
+      # Mounting ./data over /app/data would hide required CSV files in the image.
+      - ./data/teams:/app/data/teams
     expose:
       - "8000"
     restart: unless-stopped

@@ -113,6 +113,8 @@ Browser
 
 Kun web-porten publiseres. API-et har ingen public `ports:` i default compose.
 
+Static fantasy-data, TV2-priser og mappings er bakt inn i API-imaget. Default compose mounter derfor bare `./data/teams` som persistent volum. Ikke mount hele `./data` over `/app/data` i production, fordi det skjuler CSV-filene som ligger i imaget.
+
 ## Lagrede lag
 
 Lag lagres server-side her:
@@ -121,7 +123,7 @@ Lag lagres server-side her:
 data/teams/*.json
 ```
 
-Disse JSON-filene er gitignoret, men `data/teams/` mountes persistent av Docker Compose. Det betyr at lagene overlever container-restart/rebuild.
+Disse JSON-filene er gitignoret, men `data/teams/` mountes persistent av Docker Compose. Det betyr at lagene overlever container-restart/rebuild uten å overskrive prisdataene som er bakt inn i imaget.
 
 Backup:
 
