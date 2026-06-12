@@ -56,12 +56,12 @@ NEXT_PUBLIC_API_BASE_URL=/api
 ## Caddy (subdomene)
 
 ```
-footballsage.vstokke.com {
+footballsage.example.com {
     import common
     import logging footballsage
     import authelia_middleware
 
-    reverse_proxy 192.168.1.230:3000
+    reverse_proxy <app-server-ip>:3000
 }
 ```
 
@@ -71,8 +71,8 @@ route-handler sender `/api/*` til API-containeren internt.
 ## Slik fungerer det
 
 ```
-Browser → https://footballsage.vstokke.com/api/saved-teams
-  → Caddy → 192.168.1.230:3000/api/saved-teams
+Browser → https://footballsage.example.com/api/saved-teams
+  → Caddy → <app-server-ip>:3000/api/saved-teams
     → Next.js route-proxy → http://api:8000/saved-teams
       → FastAPI svarer
 ```
@@ -85,7 +85,7 @@ LAN-IP, Tailscale og offentlig domene.
 - [ ] `.env`: `NEXT_PUBLIC_API_BASE_URL=/api`
 - [ ] compose: kun web-port eksponert, `API_INTERNAL_URL=http://api:8000`
 - [ ] compose: API-volum er `./data/teams:/app/data/teams`, ikke `./data:/app/data`
-- [ ] Caddy: subdomene → `192.168.1.230:3000`
+- [ ] Caddy: subdomene → `<app-server-ip>:3000`
 - [ ] Authelia: legg til `import authelia_middleware` om ønsket
-- [ ] Åpne `https://footballsage.vstokke.com` → team-select vises med CSS
-- [ ] Åpne `https://footballsage.vstokke.com/api/health` → `{"status":"ok"}`
+- [ ] Åpne `https://footballsage.example.com` → team-select vises med CSS
+- [ ] Åpne `https://footballsage.example.com/api/health` → `{"status":"ok"}`

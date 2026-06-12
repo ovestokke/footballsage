@@ -56,13 +56,7 @@ http://localhost:3000
 På en annen enhet på samme nettverk:
 
 ```text
-http://SERVER-IP:3000
-```
-
-Eksempel:
-
-```text
-http://192.168.1.132:3000
+http://<server-ip>:3000
 ```
 
 ## Konfigurasjon
