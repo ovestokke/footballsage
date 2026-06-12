@@ -65,6 +65,29 @@ def test_import_text_returns_manual_verification_candidates() -> None:
     assert {"Erling Haaland", "Mohamed Salah", "Marcus Rashford"} <= matched_names
 
 
+def test_import_text_preserves_lineup_order_and_captain_markers() -> None:
+    client = TestClient(app)
+    response = client.post(
+        "/team/import-text",
+        json={
+            "provider": "tv2",
+            "text": "starter|C|Manu Koné\nstarter|VC|Leonardo Balerdi\nbench|none|Vitinha\nbench|none|Munir Mohamedi",
+        },
+    )
+    assert response.status_code == 200
+    candidates = response.json()["candidates"]
+    assert [candidate["match"]["name"] for candidate in candidates[:4]] == [
+        "Manu Koné",
+        "Leonardo Balerdi",
+        "Vitinha",
+        "Munir Mohamedi",
+    ]
+    assert candidates[0]["is_captain"] is True
+    assert candidates[1]["is_vice_captain"] is True
+    assert candidates[2]["suggested_role"] == "bench"
+    assert candidates[3]["suggested_role"] == "bench"
+
+
 def test_team_analyze_returns_validation_and_suggestions() -> None:
     client = TestClient(app)
     import_response = client.post(

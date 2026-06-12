@@ -672,38 +672,33 @@ def match_team_text(text: str, provider: str) -> TeamImportResponse:
     catalog = [(row, normalize_match_text(row["name"])) for row in rows]
     full_text_norm = normalize_match_text(text)
     candidates_by_player_id: dict[str, TeamImportCandidate] = {}
+    candidate_order: list[str] = []
     unmatched: list[TeamImportCandidate] = []
+
+    def has_lineup_metadata(candidate: TeamImportCandidate) -> bool:
+        return bool(candidate.suggested_role or candidate.is_captain or candidate.is_vice_captain)
 
     def add_candidate(candidate: TeamImportCandidate) -> None:
         if candidate.match:
-            existing = candidates_by_player_id.get(candidate.match.player_id)
-            if not existing or candidate.confidence > existing.confidence:
-                candidates_by_player_id[candidate.match.player_id] = candidate
-            elif existing and candidate.confidence >= existing.confidence - 0.03:
-                if candidate.suggested_role or candidate.is_captain or candidate.is_vice_captain:
-                    candidates_by_player_id[candidate.match.player_id] = existing.model_copy(
-                        update={
-                            "raw_text": candidate.raw_text,
-                            "suggested_role": candidate.suggested_role or existing.suggested_role,
-                            "is_captain": existing.is_captain or candidate.is_captain,
-                            "is_vice_captain": existing.is_vice_captain or candidate.is_vice_captain,
-                        }
-                    )
+            player_id = candidate.match.player_id
+            existing = candidates_by_player_id.get(player_id)
+            if not existing:
+                candidates_by_player_id[player_id] = candidate
+                candidate_order.append(player_id)
+            elif has_lineup_metadata(candidate) and candidate.confidence >= existing.confidence - 0.12:
+                candidates_by_player_id[player_id] = existing.model_copy(
+                    update={
+                        "raw_text": candidate.raw_text,
+                        "suggested_role": candidate.suggested_role or existing.suggested_role,
+                        "is_captain": existing.is_captain or candidate.is_captain,
+                        "is_vice_captain": existing.is_vice_captain or candidate.is_vice_captain,
+                        "confidence": max(existing.confidence, candidate.confidence),
+                    }
+                )
+            elif candidate.confidence > existing.confidence and not has_lineup_metadata(existing):
+                candidates_by_player_id[player_id] = candidate
         elif candidate.raw_text:
             unmatched.append(candidate)
-
-    for row, player_norm in catalog:
-        if len(player_norm) >= 8 and player_norm in full_text_norm:
-            option = import_option(row)
-            add_candidate(
-                TeamImportCandidate(
-                    raw_text=row["name"],
-                    status="matched",
-                    confidence=0.99,
-                    match=option,
-                    alternatives=[option],
-                )
-            )
 
     lines = [line.strip() for line in text.splitlines() if line.strip()]
     for line in lines:
@@ -738,10 +733,24 @@ def match_team_text(text: str, provider: str) -> TeamImportResponse:
             )
         )
 
-    candidates = sorted(
-        list(candidates_by_player_id.values()) + unmatched[:8],
-        key=lambda item: (item.status != "matched", item.status != "review", -item.confidence),
-    )[:30]
+    # Add exact full-text matches that were not emitted as their own OCR line.
+    # Do this after line matching so the verification screen keeps screenshot order;
+    # that order is used as a safe fallback for starter/bench assignment.
+    for row, player_norm in catalog:
+        if len(player_norm) >= 8 and player_norm in full_text_norm:
+            option = import_option(row)
+            add_candidate(
+                TeamImportCandidate(
+                    raw_text=row["name"],
+                    status="matched",
+                    confidence=0.99,
+                    match=option,
+                    alternatives=[option],
+                )
+            )
+
+    candidates = [candidates_by_player_id[player_id] for player_id in candidate_order] + unmatched[:8]
+    candidates = candidates[:30]
     notes = [
         "OCR/import is intentionally provisional; confirm every player before saving or rating.",
         "TV2 prices are loaded from their public static CSV when provider=tv2.",
@@ -1004,6 +1013,11 @@ def import_team_screenshot(payload: TeamImportScreenshotRequest) -> TeamImportRe
         text = run_tesseract(image_bytes, payload.filename)
         ocr_notes.append("Screenshot OCR used local tesseract because LLM OCR is not configured.")
     except Exception as exc:
+        if os.environ.get("SAGE_OCR_LLM_PROVIDER") or os.environ.get("SAGE_OCR_LLM_MODEL"):
+            raise HTTPException(
+                status_code=502,
+                detail=f"LLM screenshot OCR failed ({type(exc).__name__}); explicit SAGE_OCR_* config is set, so Tesseract fallback was not used.",
+            ) from exc
         text = run_tesseract(image_bytes, payload.filename)
         ocr_notes.append(f"LLM screenshot OCR failed; used local tesseract fallback ({type(exc).__name__}).")
 
