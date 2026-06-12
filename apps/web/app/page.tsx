@@ -2,7 +2,7 @@
 
 import { useEffect, useMemo, useState } from "react";
 
-const apiBase = process.env.NEXT_PUBLIC_API_BASE_URL ?? "http://localhost:8000";
+const apiBase = process.env.NEXT_PUBLIC_API_BASE_URL ?? "/api";
 const squadSize = 15;
 const sampleTeam = [
   "Emiliano Martínez",
@@ -22,7 +22,45 @@ const sampleTeam = [
   "Julián Alvarez",
 ].join("\n");
 
-type Scene = "import" | "verify" | "analysis";
+type Scene = "team-select" | "import" | "verify" | "analysis";
+
+type SavedTeam = {
+  id: string;
+  name: string;
+  provider: "tv2" | "fifa_official";
+  round: number;
+  selections: TeamSelection[];
+  created_at: string;
+  updated_at: string;
+};
+
+async function apiLoadTeams(): Promise<SavedTeam[]> {
+  try {
+    const response = await fetch(`${apiBase}/saved-teams`);
+    if (!response.ok) return [];
+    return response.json();
+  } catch {
+    return [];
+  }
+}
+
+async function apiSaveTeam(team: SavedTeam, isNew: boolean): Promise<SavedTeam> {
+  const [method, url] = isNew
+    ? ["POST", `${apiBase}/saved-teams`]
+    : ["PUT", `${apiBase}/saved-teams/${team.id}`];
+  const response = await fetch(url, {
+    method,
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(team),
+  });
+  if (!response.ok) throw new Error(`Klarte ikke lagre lag (${response.status})`);
+  return response.json();
+}
+
+async function apiDeleteTeam(teamId: string): Promise<void> {
+  const response = await fetch(`${apiBase}/saved-teams/${teamId}`, { method: "DELETE" });
+  if (!response.ok && response.status !== 404) throw new Error(`Failed to delete team (${response.status})`);
+}
 
 type Player = {
   player_id: string;
@@ -133,7 +171,8 @@ type SageAdviceResponse = {
 };
 
 export default function Home() {
-  const [scene, setScene] = useState<Scene>("import");
+  const [scene, setScene] = useState<Scene>("team-select");
+  const [activeTeamId, setActiveTeamId] = useState<string | null>(null);
   const [teamText, setTeamText] = useState(sampleTeam);
   const [importResult, setImportResult] = useState<ImportResponse | null>(null);
   const [draftSelections, setDraftSelections] = useState<Record<number, string>>({});
@@ -150,9 +189,24 @@ export default function Home() {
   const [loading, setLoading] = useState(false);
   const [analyzing, setAnalyzing] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
+  const [teams, setTeams] = useState<SavedTeam[]>([]);
+  const [editingTeamId, setEditingTeamId] = useState<string | null>(null);
+  const [renamingTeamId, setRenamingTeamId] = useState<string | null>(null);
+  const [renameValue, setRenameValue] = useState("");
+
+  const activeTeam = useMemo(() => teams.find((t) => t.id === activeTeamId) ?? null, [teams, activeTeamId]);
+
+  useEffect(() => {
+    apiLoadTeams().then(setTeams);
+  }, []);
 
   const visibleCandidates = useMemo(() => (importResult?.candidates ?? []).filter((candidate) => !isNoise(candidate)), [importResult]);
   const ignoredCandidates = useMemo(() => (importResult?.candidates ?? []).filter(isNoise), [importResult]);
+
+  const parsedProvider = useMemo(() => {
+    if (!importResult) return "tv2" as const;
+    return importResult.provider as "tv2" | "fifa_official";
+  }, [importResult]);
   const selectedDraftIds = useMemo(() => unique(Object.values(draftSelections)), [draftSelections]);
   const selectedDraftCount = selectedDraftIds.length;
   const starterCount = selectedDraftIds.filter((playerId) => draftLineup[playerId]?.role !== "bench").length;
@@ -306,17 +360,38 @@ export default function Home() {
     });
   }
 
-  function confirmSquad() {
+  async function confirmSquad() {
     if (!selectedDraftIsConfirmable) return;
-    setConfirmedSelections(
-      selectedDraftIds.map((playerId) => ({
-        player_id: playerId,
-        role: draftLineup[playerId]?.role ?? "starter",
-        is_captain: Boolean(draftLineup[playerId]?.is_captain),
-        is_vice_captain: Boolean(draftLineup[playerId]?.is_vice_captain),
-      })),
-    );
-    setScene("analysis");
+    const selections = selectedDraftIds.map((playerId) => ({
+      player_id: playerId,
+      role: draftLineup[playerId]?.role ?? "starter",
+      is_captain: Boolean(draftLineup[playerId]?.is_captain),
+      is_vice_captain: Boolean(draftLineup[playerId]?.is_vice_captain),
+    }));
+    setConfirmedSelections(selections);
+
+    const existingTeam = editingTeamId ? teams.find((t) => t.id === editingTeamId) : null;
+    const teamName = existingTeam?.name ?? `Lag ${teams.length + 1}`;
+    const savedTeam: SavedTeam = {
+      id: editingTeamId ?? "",
+      name: teamName,
+      provider: parsedProvider,
+      round,
+      selections,
+      created_at: existingTeam?.created_at ?? new Date().toISOString(),
+      updated_at: new Date().toISOString(),
+    };
+    const isNew = !editingTeamId;
+
+    try {
+      const result = await apiSaveTeam(savedTeam, isNew);
+      setTeams(await apiLoadTeams());
+      setActiveTeamId(result.id);
+      setEditingTeamId(null);
+      setScene("analysis");
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : "Klarte ikke lagre laget");
+    }
   }
 
   function navigateToScene(target: Scene) {
@@ -332,6 +407,114 @@ export default function Home() {
     setAnalysis(null);
     setSageAdvice(null);
     setMessage(null);
+    setEditingTeamId(null);
+  }
+
+  function openTeam(teamId: string) {
+    const team = teams.find((t) => t.id === teamId);
+    if (!team) return;
+    setActiveTeamId(teamId);
+    setRound(team.round);
+    setConfirmedSelections(team.selections);
+    setAnalysis(null);
+    setSageAdvice(null);
+    setMessage(null);
+    setScene("analysis");
+  }
+
+  function editTeam(teamId: string) {
+    const team = teams.find((t) => t.id === teamId);
+    if (!team) return;
+    setEditingTeamId(teamId);
+    setActiveTeamId(teamId);
+    setRound(team.round);
+
+    // Build a synthetic import result from the saved selections so verify scene works
+    (async () => {
+      try {
+        const params = new URLSearchParams({
+          provider: team.provider,
+          round: String(team.round),
+        });
+        const response = await fetch(`${apiBase}/players?${params}`);
+        if (!response.ok) throw new Error(`Failed to fetch players (${response.status})`);
+        const allPlayers: Player[] = await response.json();
+        const playersById = new Map(allPlayers.map((p) => [p.player_id, p]));
+
+        const candidates: ImportCandidate[] = team.selections.flatMap((sel) => {
+          const player = playersById.get(sel.player_id);
+          if (!player) return [];
+          const option: ImportPlayerOption = {
+            player_id: player.player_id,
+            name: player.name,
+            team: player.team,
+            team_abbr: player.team_abbr,
+            position: player.position,
+            price: player.price,
+            worldcup_player_id: player.worldcup_player_id,
+          };
+          return [{
+            raw_text: player.name,
+            status: "matched",
+            confidence: 1.0,
+            match: option,
+            alternatives: [option],
+            suggested_role: sel.role === "bench" ? "bench" : "starter",
+            is_captain: sel.is_captain,
+            is_vice_captain: sel.is_vice_captain,
+          } satisfies ImportCandidate];
+        });
+
+        const syntheticResult: ImportResponse = {
+          provider: team.provider,
+          raw_text: "(existing team)",
+          needs_manual_verification: false,
+          candidates,
+          notes: ["Lag hentet fra lagret tropp."],
+        };
+
+        const nextSelections: Record<number, string> = {};
+        const nextLineup: Record<string, Omit<TeamSelection, "player_id">> = {};
+        candidates.forEach((candidate, index) => {
+          nextSelections[index] = candidate.match!.player_id;
+          nextLineup[candidate.match!.player_id] = {
+            role: candidate.suggested_role ?? team.selections[index]?.role ?? "starter",
+            is_captain: candidate.is_captain,
+            is_vice_captain: candidate.is_vice_captain,
+          };
+        });
+
+        setImportResult(syntheticResult);
+        setDraftSelections(nextSelections);
+        setDraftLineup(nextLineup);
+        setConfirmedSelections(team.selections);
+        setScene("verify");
+      } catch (error) {
+        setMessage(error instanceof Error ? error.message : "Klarte ikke hente spillere for redigering");
+      }
+    })();
+  }
+
+  async function renameTeam(teamId: string, name: string) {
+    const team = teams.find((t) => t.id === teamId);
+    if (!team) return;
+    try {
+      await apiSaveTeam({ ...team, name, updated_at: new Date().toISOString() }, false);
+      setTeams(await apiLoadTeams());
+    } catch { /* ignore */ }
+    setRenamingTeamId(null);
+  }
+
+  async function removeTeam(teamId: string) {
+    try {
+      await apiDeleteTeam(teamId);
+      setTeams(await apiLoadTeams());
+    } catch { /* ignore */ }
+    if (activeTeamId === teamId) {
+      setActiveTeamId(null);
+      setConfirmedSelections([]);
+      setAnalysis(null);
+    }
   }
 
   function setDraftRole(playerId: string, role: "starter" | "bench") {
@@ -366,17 +549,62 @@ export default function Home() {
         <div>
           <p className="eyebrow">FootballSage</p>
           <h1>Få AI-råd til neste fantasy-runde.</h1>
-          <p>Tre steg: importer laget, bekreft 15 spillere, og spør Sage om bytter, kaptein og problemer før neste runde.</p>
+          <p>Importer laget ditt, bekreft 15 spillere, og spør Sage om bytter, kaptein og problemer før neste runde.</p>
         </div>
         <SceneSteps
           scene={scene}
           canVerify={importResult !== null}
           canAnalyze={confirmedSelections.length > 0}
           onNavigate={navigateToScene}
+          hasTeams={teams.length > 0}
         />
       </header>
 
       {message && <p className="global-message">{message}</p>}
+
+      {scene === "team-select" && (
+        <section className="scene-card team-select-scene">
+          <div className="scene-copy">
+            <p className="eyebrow">Dine lag</p>
+            <h2>Velg lag eller opprett nytt</h2>
+            <p>Hvert lag lagres lokalt i nettleseren. Du kan ha flere lag samtidig – for eksempel ett til VM-liga og ett til venneliga.</p>
+          </div>
+
+          {teams.length > 0 ? (
+            <div className="team-list">
+              {teams.map((team) => (
+                <div className="team-card" key={team.id}>
+                  <div className="team-card-info" onClick={() => openTeam(team.id)} style={{ cursor: "pointer" }}>
+                    <strong>{team.name}</strong>
+                    <span>{team.selections.length} spillere · Runde {team.round}</span>
+                    <small>{new Date(team.updated_at).toLocaleDateString("nb-NO", { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" })}</small>
+                  </div>
+                  <div className="team-card-actions">
+                    <button className="secondary-button team-action-btn" onClick={() => openTeam(team.id)}>Åpne</button>
+                    <button className="secondary-button team-action-btn" onClick={() => editTeam(team.id)}>Rediger</button>
+                    {renamingTeamId === team.id ? (
+                      <form className="rename-form" onSubmit={(e) => { e.preventDefault(); renameTeam(team.id, renameValue); }}>
+                        <input value={renameValue} onChange={(e) => setRenameValue(e.target.value)} />
+                        <button type="submit" className="secondary-button team-action-btn">Lagre</button>
+                        <button type="button" className="secondary-button team-action-btn" onClick={() => setRenamingTeamId(null)}>Avbryt</button>
+                      </form>
+                    ) : (
+                      <button className="secondary-button team-action-btn" onClick={() => { setRenamingTeamId(team.id); setRenameValue(team.name); }}>Gi nytt navn</button>
+                    )}
+                    <button className="secondary-button team-action-btn team-delete-btn" onClick={() => { if (confirm(`Slette \u00AB${team.name}\u00BB?`)) removeTeam(team.id); }}>Slett</button>
+                  </div>
+                </div>
+              ))}
+            </div>
+          ) : (
+            <p className="empty">Ingen lag lagret ennå. Opprett ditt første lag ved å importere spillere.</p>
+          )}
+
+          <div className="scene-actions">
+            <button onClick={startNewImport}>+ Opprett nytt lag</button>
+          </div>
+        </section>
+      )}
 
       {scene === "import" && (
         <section className="scene-card import-scene">
@@ -398,7 +626,7 @@ export default function Home() {
             <article className="panel upload-panel">
               <PanelHeader title="Screenshot" subtitle="Anbefalt. OCR filtrerer bort overskrifter og støy før du bekrefter laget." />
               <label className="upload-zone">
-                <input accept="image/*" type="file" onChange={(event) => void importScreenshot(event.target.files?.[0] ?? null)} />
+                <input accept="image/*" type="file" onChange={(event) => { void importScreenshot(event.target.files?.[0] ?? null); event.target.value = ""; }} />
                 <strong>{loading ? "Leser screenshot…" : "Velg screenshot"}</strong>
                 <span>PNG/JPG/WebP. Crop rundt spillerlisten gir best treff.</span>
               </label>
@@ -498,7 +726,8 @@ export default function Home() {
 
           <div className="scene-actions">
             <button className="secondary-button" onClick={() => navigateToScene("import")}>Tilbake til import</button>
-            <button disabled={!selectedDraftIsConfirmable} onClick={confirmSquad}>Bekreft lag</button>
+            {teams.length > 0 && <button className="secondary-button" onClick={() => navigateToScene("team-select")}>Dine lag</button>}
+            <button disabled={!selectedDraftIsConfirmable} onClick={confirmSquad}>Bekreft og lagre lag</button>
           </div>
         </section>
       )}
@@ -523,8 +752,9 @@ export default function Home() {
                 <option value={8}>Finale</option>
               </select>
             </label>
-            <button className="secondary-button" onClick={() => navigateToScene("verify")}>Endre lag</button>
-            <button className="secondary-button" onClick={startNewImport}>Start på nytt</button>
+            <button className="secondary-button" onClick={() => editTeam(activeTeamId ?? "")}>Endre lag</button>
+            <button className="secondary-button" onClick={() => navigateToScene("team-select")}>Dine lag</button>
+            <button className="secondary-button" onClick={startNewImport}>Nytt lag</button>
           </div>
 
           <section className="summary-grid" aria-label="Lagstatus">
@@ -574,30 +804,38 @@ function SceneSteps({
   canVerify,
   canAnalyze,
   onNavigate,
+  hasTeams,
 }: {
   scene: Scene;
   canVerify: boolean;
   canAnalyze: boolean;
   onNavigate: (target: Scene) => void;
+  hasTeams: boolean;
 }) {
   const steps: Array<[Scene, string, boolean]> = [
+    ["team-select", "Lag", hasTeams],
     ["import", "Importer", true],
     ["verify", "Bekreft", canVerify],
     ["analysis", "Sjekk", canAnalyze],
   ];
   return (
-    <ol className="scene-steps">
-      {steps.map(([key, label, unlocked]) => (
-        <li key={key}>
-          {unlocked ? (
-            <button className={scene === key ? "active" : ""} onClick={() => onNavigate(key)}>
+    <ol className="scene-steps" aria-label="Flyt">
+      {steps.map(([key, label, unlocked]) => {
+        const isActive = scene === key;
+        return (
+          <li key={key}>
+            <button
+              aria-current={isActive ? "step" : undefined}
+              className={isActive ? "active" : ""}
+              disabled={!unlocked && !isActive}
+              onClick={() => onNavigate(key)}
+              type="button"
+            >
               {label}
             </button>
-          ) : (
-            <span className={scene === key ? "active" : "muted"}>{label}</span>
-          )}
-        </li>
-      ))}
+          </li>
+        );
+      })}
     </ol>
   );
 }

@@ -3,6 +3,7 @@ from __future__ import annotations
 import base64
 import binascii
 import csv
+import os
 import re
 from collections import Counter
 import shutil
@@ -39,11 +40,25 @@ SQUAD_SIZE = 15
 SQUAD_BUDGET = 100.0
 MAX_PLAYERS_PER_COUNTRY = 3
 POSITION_TARGETS = {"GK": 2, "DEF": 5, "MID": 5, "FWD": 3}
+TEAMS_DIR = ROOT / "data" / "teams"
+TEAMS_DIR.mkdir(parents=True, exist_ok=True)
 
-app = FastAPI(title="FootballSage API", version="0.1.0")
+_api_prefix = os.environ.get("API_PREFIX", "").rstrip("/")
+
+app = FastAPI(
+    title="FootballSage API",
+    version="0.1.0",
+    root_path=_api_prefix,
+)
+
+_cors_origins_str = os.environ.get("CORS_ORIGINS", "*").strip()
+cors_origins = [origin.strip() for origin in _cors_origins_str.split(",") if origin.strip()]
+if not cors_origins:
+    cors_origins = ["*"]
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:3000", "http://127.0.0.1:3000"],
+    allow_origins=cors_origins,
     allow_credentials=False,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -234,6 +249,24 @@ class SageAdviceResponse(BaseModel):
     model: str
     advice: SageAdvice
     context: dict[str, Any]
+
+
+class SavedTeamSelection(BaseModel):
+    player_id: str
+    role: str = Field(default="starter", pattern="^(starter|bench)$")
+    is_captain: bool = False
+    is_vice_captain: bool = False
+
+
+class SavedTeam(BaseModel):
+    id: str
+    name: str
+    provider: str = Field(default="tv2", pattern="^(fifa_official|tv2)$")
+    round: int = Field(default=1, ge=1, le=8)
+    selections: list[SavedTeamSelection]
+    created_at: str
+    updated_at: str
+
 
 
 def expected_points(position: str, price: float, status: str, difficulty: int | None) -> tuple[float, list[str]]:
@@ -539,7 +572,7 @@ def analyze_team_request(payload: TeamAnalysisRequest) -> TeamAnalysisResponse:
         position_counts=position_counts,
         selected_players=selected_players,
         lineup=lineup,
-        issues=issues[:12],
+        issues=issues,
         captain_picks=captain_picks,
         bench_candidates=bench_candidates,
         suggestions=suggestions[:8],
@@ -743,6 +776,70 @@ def run_tesseract(image_bytes: bytes, filename: str | None) -> str:
         detail = result.stderr.strip() or "OCR failed"
         raise HTTPException(status_code=422, detail=detail)
     return result.stdout.strip()
+
+
+import json
+import uuid
+from datetime import datetime, timezone
+
+
+def _team_path(team_id: str) -> Path:
+    return TEAMS_DIR / f"{team_id}.json"
+
+
+def _read_team(team_id: str) -> SavedTeam | None:
+    path = _team_path(team_id)
+    if not path.exists():
+        return None
+    return SavedTeam.model_validate_json(path.read_text(encoding="utf-8"))
+
+
+def _write_team(team: SavedTeam) -> SavedTeam:
+    path = _team_path(team.id)
+    path.write_text(team.model_dump_json(indent=2), encoding="utf-8")
+    return team
+
+
+@app.get("/saved-teams", response_model=list[SavedTeam])
+def list_saved_teams() -> list[SavedTeam]:
+    teams: list[SavedTeam] = []
+    for path in sorted(TEAMS_DIR.glob("*.json")):
+        try:
+            teams.append(SavedTeam.model_validate_json(path.read_text(encoding="utf-8")))
+        except (ValidationError, json.JSONDecodeError):
+            continue
+    return teams
+
+
+@app.put("/saved-teams/{team_id}", response_model=SavedTeam)
+def put_saved_team(team_id: str, payload: SavedTeam) -> SavedTeam:
+    """Overwrite an existing team."""
+    team = payload.model_copy(update={"id": team_id})
+    return _write_team(team)
+
+
+@app.post("/saved-teams", response_model=SavedTeam, status_code=201)
+def post_saved_team(payload: SavedTeam) -> SavedTeam:
+    """Create a new team. Server generates the ID."""
+    team = payload.model_copy(update={"id": uuid.uuid4().hex[:12]})
+    return _write_team(team)
+
+
+@app.get("/saved-teams/{team_id}", response_model=SavedTeam)
+def get_saved_team(team_id: str) -> SavedTeam:
+    team = _read_team(team_id)
+    if not team:
+        raise HTTPException(status_code=404, detail="Team not found")
+    return team
+
+
+@app.delete("/saved-teams/{team_id}", response_model=dict[str, str])
+def delete_saved_team(team_id: str) -> dict[str, str]:
+    path = _team_path(team_id)
+    if not path.exists():
+        raise HTTPException(status_code=404, detail="Team not found")
+    path.unlink()
+    return {"status": "deleted"}
 
 
 @app.get("/health")

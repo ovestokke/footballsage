@@ -12,4 +12,4 @@ COPY data /app/data
 COPY services/worldcup/db/dump /app/services/worldcup/db/dump
 
 EXPOSE 8000
-CMD ["uvicorn", "footballsage_api.main:app", "--host", "0.0.0.0", "--port", "8000"]
+CMD ["sh", "-c", "exec uvicorn footballsage_api.main:app --host 0.0.0.0 --port 8000 ${API_RELOAD:+--reload}"]

@@ -235,3 +235,4 @@ dist/
 *.sqlite
 *.sqlite3
 data/snapshots/*.json
+data/teams/*.json

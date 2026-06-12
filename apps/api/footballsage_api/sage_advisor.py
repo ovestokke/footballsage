@@ -308,7 +308,7 @@ def _replacement_candidates(
         compact["expected_points_delta"] = delta
         candidates.append(compact)
 
-    return sorted(candidates, key=lambda item: (item["expected_points_delta"], item.get("expected_points") or 0), reverse=True)[:8]
+    return sorted(candidates, key=lambda item: (item["expected_points_delta"], item.get("expected_points") or 0), reverse=True)[:3]
 
 
 def _captain_candidates(lineup: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -353,20 +353,23 @@ starter|C|Erling Haaland
 starter|VC|Alexander Isak
 bench|none|Vitinha
 """
-    client = OpenAI(api_key=config.api_key, base_url=config.base_url)
-    response = client.chat.completions.create(
-        model=config.model,
-        messages=[
-            {
-                "role": "user",
-                "content": [
-                    {"type": "text", "text": prompt},
-                    {"type": "image_url", "image_url": {"url": image_data_url}},
-                ],
-            }
-        ],
-        temperature=0,
-    )
+    client = OpenAI(api_key=config.api_key, base_url=config.base_url, timeout=45.0)
+    try:
+        response = client.chat.completions.create(
+            model=config.model,
+            messages=[
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "text", "text": prompt},
+                        {"type": "image_url", "image_url": {"url": image_data_url}},
+                    ],
+                }
+            ],
+            temperature=0,
+        )
+    except Exception as exc:
+        raise SageLLMError(f"OCR API call failed: {type(exc).__name__}") from exc
     content = (response.choices[0].message.content or "").strip()
     if not content:
         raise SageLLMError("LLM OCR returned no text")
@@ -399,13 +402,16 @@ def _call_openai_compatible(config: SageLLMConfig, system_prompt: str, user_prom
     except ImportError as exc:
         raise SageConfigError("Install the openai package to use Sage with openai/openrouter") from exc
 
-    client = OpenAI(api_key=config.api_key, base_url=config.base_url)
-    response = client.chat.completions.create(
-        model=config.model,
-        messages=[{"role": "system", "content": system_prompt}, {"role": "user", "content": user_prompt}],
-        response_format={"type": "json_object"},
-        temperature=0.2,
-    )
+    client = OpenAI(api_key=config.api_key, base_url=config.base_url, timeout=45.0)
+    try:
+        response = client.chat.completions.create(
+            model=config.model,
+            messages=[{"role": "system", "content": system_prompt}, {"role": "user", "content": user_prompt}],
+            response_format={"type": "json_object"},
+            temperature=0.2,
+        )
+    except Exception as exc:
+        raise SageLLMError(f"LLM API call failed: {type(exc).__name__}") from exc
     content = response.choices[0].message.content or ""
     return _parse_json(content)
 

@@ -1,0 +1,38 @@
+services:
+  api:
+    build:
+      context: .
+      dockerfile: apps/api/Dockerfile
+    env_file:
+      - path: .env
+        required: false
+    environment:
+      API_RELOAD: "1"
+    ports:
+      - "${API_PORT:-8000}:8000"
+    volumes:
+      - ./data:/app/data
+      - ./apps/api:/app/apps/api
+    restart: unless-stopped
+
+  web:
+    image: node:22-alpine
+    working_dir: /app
+    command: sh -c "corepack enable && pnpm install && pnpm --filter @footballsage/web dev --hostname 0.0.0.0 --port 3000"
+    environment:
+      API_INTERNAL_URL: http://api:8000
+      NEXT_PUBLIC_API_BASE_URL: /api
+      CI: "true"
+    ports:
+      - "${WEB_PORT:-3000}:3000"
+    volumes:
+      - .:/app
+      - /app/node_modules
+      - /app/apps/web/node_modules
+      - pnpm-store:/root/.local/share/pnpm/store
+    depends_on:
+      - api
+    restart: unless-stopped
+
+volumes:
+  pnpm-store:

@@ -1,15 +1,37 @@
+# secrets / local config
+.env
+.env.*
+!.env.example
+
+# git / editor
 .git
 .gitignore
-**/.env
-**/.env.*
-!**/.env.example
+.vscode
+.idea
+
+# node
+node_modules
+**/node_modules
+apps/web/.next
+apps/web/out
+.pnpm-store
+
+# python
 **/.venv
 **/__pycache__
-**/*.pyc
 **/.pytest_cache
 **/.ruff_cache
-**/node_modules
-**/.next
+*.pyc
+
+# build outputs
 **/dist
 **/out
 .DS_Store
+
+# runtime data
+# Keep directory structure in git, but don't bake saved teams into images.
+data/teams/*.json
+
+# logs / run state
+.run
+*.log
