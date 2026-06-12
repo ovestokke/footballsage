@@ -1012,7 +1012,12 @@ def import_team_screenshot(payload: TeamImportScreenshotRequest) -> TeamImportRe
     try:
         text, llm_meta = sage_advisor.ocr_team_screenshot(payload.image_base64)
         ocr_notes.append(f"Screenshot OCR used {llm_meta['provider']} model {llm_meta['model']}.")
-    except sage_advisor.SageConfigError:
+    except sage_advisor.SageConfigError as exc:
+        logger.warning(
+            "LLM screenshot OCR unavailable (%s); using local tesseract. "
+            "Check SAGE_LLM_PROVIDER, SAGE_LLM_MODEL, and API key env vars.",
+            exc,
+        )
         text = run_tesseract(image_bytes, payload.filename)
         ocr_notes.append("Screenshot OCR used local tesseract because LLM OCR is not configured.")
     except Exception as exc:
