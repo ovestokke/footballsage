@@ -3,6 +3,7 @@ from __future__ import annotations
 import base64
 import binascii
 import csv
+import logging
 import os
 import re
 from collections import Counter
@@ -20,6 +21,8 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field, ValidationError
 
 from . import sage_advisor
+
+logger = logging.getLogger("footballsage.api")
 from .worldcup_adapter import (
     fixture_difficulty,
     get_worldcup_data,
@@ -1013,11 +1016,11 @@ def import_team_screenshot(payload: TeamImportScreenshotRequest) -> TeamImportRe
         text = run_tesseract(image_bytes, payload.filename)
         ocr_notes.append("Screenshot OCR used local tesseract because LLM OCR is not configured.")
     except Exception as exc:
-        if os.environ.get("SAGE_OCR_LLM_PROVIDER") or os.environ.get("SAGE_OCR_LLM_MODEL"):
-            raise HTTPException(
-                status_code=502,
-                detail=f"LLM screenshot OCR failed ({type(exc).__name__}); explicit SAGE_OCR_* config is set, so Tesseract fallback was not used.",
-            ) from exc
+        logger.warning(
+            "LLM screenshot OCR failed (%s); falling back to local tesseract. "
+            "OCR quality will be lower — C/VC/B markers will NOT be detected.",
+            type(exc).__name__,
+        )
         text = run_tesseract(image_bytes, payload.filename)
         ocr_notes.append(f"LLM screenshot OCR failed; used local tesseract fallback ({type(exc).__name__}).")
 
