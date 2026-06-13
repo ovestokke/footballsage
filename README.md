@@ -102,47 +102,39 @@ Kun web-porten (`3000`) publiseres. De tre andre snakker bare over internt Docke
 ## Dataflyt
 
 ```text
-                          ( internett )
-                               │
-                               ▼
-┌ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ┐
-                          Caddy + Authelia                         │
-│                    (TLS-terminering, SSO)                         │
-                               │                                    │
-│                              ▼                                    │
-                          web :3000                                 │
-│                    (Next.js server)                                │
-                      /          \                                  │
-│               static pages      /api/*                             │
-                     │                │                              │
-│                    │          (intern proxy)                       │
-                     │                │                              │
-│                    │                ▼                              │
-                     │           api :8000                           │
-│                    │        (FastAPI, Python)                       │
-                     │         │              \                      │
-│                    │    CSV-data         WORLDCUP_API_URL           │
-                     │   (priser,          til worldcup-api          │
-│                    │    mappings)               │                   │
-                     │         │                  ▼                  │
-│                    │         │          worldcup-api :3001          │
-                     │         │       (NestJS, Node.js)              │
-│                    │         │           │                         │
-                     │         │   scheduler poller ESPN             │
-│                    │         │    hvert 30. sekund                  │
-                     │         │           │                         │
-│                    │         │           ▼                         │
-                     │         │     worldcup-postgres :5432         │
-│                    │         │   (preloaded tournament dump)        │
-                     │         │                                      │
-└ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ┘
+     ( internet )
+          │
+          ▼
+     web :3000
+ (Next.js, React-UI)
+     │
+     │  /api/*  (intern proxy)
+     ▼
+  api :8000
+ (FastAPI, Python)
+  │
+  │  WORLDCUP_API_URL
+  ▼
+ worldcup-api :3001
+ (NestJS, Node.js)
+  │
+  │  scheduler: poller ESPN hvert 30. sekund
+  │
+  ▼
+ worldcup-postgres :5432
+ (preloadet tournament dump)
+```
 
-                               ( internet )
-                                    │
-                          ┌─────────┴─────────┐
-                          │        ESPN        │
-                          │  (live resultater) │
-                          └────────────────────┘
+```text
+  ( internet )
+       │
+  ┌────┴────┐
+  │   ESPN   │
+  │  (live)  │
+  └─────────┘
+       ▲
+       │  poll
+ worldcup-api
 ```
 
 **Steg for steg:**
@@ -152,7 +144,7 @@ Kun web-porten (`3000`) publiseres. De tre andre snakker bare over internt Docke
 3. FootballSage `api` leser VM-data fra worldcup-api (`/v1/matches`, `/v1/teams`). Henter i tillegg fantasy-priser og player mappings fra CSV-filer bakt inn i API-imaget.
 4. `api` svarer på `/fixtures`, `/players`, `/team/analyze`, `/sage/advice` med sammenslåtte data.
 5. `web` (Next.js) serverer React-UI-et, proxyer `/api/*` til API-containeren internt, og exponerer kun port 3000.
-6. Caddy/Authelia gir TLS og SSO foran web. Browseren ser bare HTTPS på domenet.
+6. 
 
 **Live-score er helt token-fri for sluttbruker.** `FOOTBALL_DATA_TOKEN` settes til `dev-placeholder` fordi upstream worldcup-api validerer at variabelen finnes, men ESPN-adapteren brukes uten ekstern API-nøkkel.
 
