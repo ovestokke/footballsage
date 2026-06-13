@@ -37,7 +37,7 @@ Krever kun:
 - En LLM API-key hvis du vil bruke Sage-råd/OCR
 
 ```bash
-git clone --recurse-submodules https://github.com/ovestokke/footballsage.git
+git clone https://github.com/ovestokke/footballsage.git
 cd footballsage
 
 cp example.env .env
@@ -88,32 +88,75 @@ Uten LLM-konfig starter appen fortsatt, men Sage-råd og screenshot-OCR vil retu
 
 ## Docker-oppsett
 
-Default `compose.yaml` bruker ferdigbygde images fra GitHub Container Registry:
+Default `compose.yaml` bruker 4 ferdigbygde images fra GitHub Container Registry:
 
 ```text
+ghcr.io/ovestokke/footballsage-worldcup-db:latest
+ghcr.io/ovestokke/footballsage-worldcup-api:latest
 ghcr.io/ovestokke/footballsage-api:latest
 ghcr.io/ovestokke/footballsage-web:latest
-ghcr.io/ovestokke/footballsage-worldcup-api:latest
-ghcr.io/ovestokke/footballsage-worldcup-db:latest
 ```
 
-Den er ment for enkel produksjonslignende kjøring:
+Kun web-porten (`3000`) publiseres. De tre andre snakker bare over internt Docker-nettverk.
+
+## Dataflyt
 
 ```text
-Browser
-  -> http://server:3000
-    -> Next.js web
-      -> intern Docker-network
-        -> FastAPI api:8000
-          -> worldcup-api:3001/v1
-            -> worldcup-postgres:5432
+                          ( internett )
+                               │
+                               ▼
+┌ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ┐
+                          Caddy + Authelia                         │
+│                    (TLS-terminering, SSO)                         │
+                               │                                    │
+│                              ▼                                    │
+                          web :3000                                 │
+│                    (Next.js server)                                │
+                      /          \                                  │
+│               static pages      /api/*                             │
+                     │                │                              │
+│                    │          (intern proxy)                       │
+                     │                │                              │
+│                    │                ▼                              │
+                     │           api :8000                           │
+│                    │        (FastAPI, Python)                       │
+                     │         │              \                      │
+│                    │    CSV-data         WORLDCUP_API_URL           │
+                     │   (priser,          til worldcup-api          │
+│                    │    mappings)               │                   │
+                     │         │                  ▼                  │
+│                    │         │          worldcup-api :3001          │
+                     │         │       (NestJS, Node.js)              │
+│                    │         │           │                         │
+                     │         │   scheduler poller ESPN             │
+│                    │         │    hvert 30. sekund                  │
+                     │         │           │                         │
+│                    │         │           ▼                         │
+                     │         │     worldcup-postgres :5432         │
+│                    │         │   (preloaded tournament dump)        │
+                     │         │                                      │
+└ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ┘
+
+                               ( internet )
+                                    │
+                          ┌─────────┴─────────┐
+                          │        ESPN        │
+                          │  (live resultater) │
+                          └────────────────────┘
 ```
 
-Kun web-porten publiseres. API-et, worldcup-api og Postgres har ingen public `ports:` i default compose.
+**Steg for steg:**
 
-Static fantasy-data, TV2-priser og mappings er bakt inn i API-imaget. Default compose mounter derfor bare `./data/teams` som persistent volum. Ikke mount hele `./data` over `/app/data` i production, fordi det skjuler CSV-filene som ligger i imaget.
+1. `worldcup-postgres` starter med en preloadet tournament dump (alle 48 lag, kampplan, spillertropper, venues).
+2. `worldcup-api` sin live-score scheduler poller ESPN hvert 30. sekund for dagens kamper og oppdaterer Postgres med live status, minutt og mål.
+3. FootballSage `api` leser VM-data fra worldcup-api (`/v1/matches`, `/v1/teams`). Henter i tillegg fantasy-priser og player mappings fra CSV-filer bakt inn i API-imaget.
+4. `api` svarer på `/fixtures`, `/players`, `/team/analyze`, `/sage/advice` med sammenslåtte data.
+5. `web` (Next.js) serverer React-UI-et, proxyer `/api/*` til API-containeren internt, og exponerer kun port 3000.
+6. Caddy/Authelia gir TLS og SSO foran web. Browseren ser bare HTTPS på domenet.
 
-Live-score krever at `worldcup-api` kjører og at API-containeren har `WORLDCUP_API_URL=http://worldcup-api:3001/v1`. Hvis dette mangler, faller API-et tilbake til statisk VM-dump og appen viser kamper uten live-oppdateringer.
+**Live-score er helt token-fri for sluttbruker.** `FOOTBALL_DATA_TOKEN` settes til `dev-placeholder` fordi upstream worldcup-api validerer at variabelen finnes, men ESPN-adapteren brukes uten ekstern API-nøkkel.
+
+**Fallback:** Hvis `worldcup-api` av en eller annen grunn ikke svarer, bruker FastAPI den statiske SQL-dumpen bakt inn i API-imaget. Appen virker, men uten live-oppdateringer.
 
 ## Lagrede lag
 
