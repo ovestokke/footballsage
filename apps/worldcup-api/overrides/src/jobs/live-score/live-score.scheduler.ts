@@ -38,17 +38,11 @@ export class LiveScoreScheduler implements OnModuleInit {
     this.registry.addCronJob('live-score', job);
     job.start();
     this.logger.log(`Live-score sync enabled (cron: ${expression}).`);
-    void this.startupCatchUp();
+    void this.tick();
   }
 
   private async tick(): Promise<void> {
-    await this.runExclusive('live-score active window', async () => {
-      await this.liveScore.syncActiveMatchWindow();
-    });
-  }
-
-  private async startupCatchUp(): Promise<void> {
-    await this.runExclusive('live-score startup catch-up', async () => {
+    await this.runExclusive('live-score catch-up/window', async () => {
       await this.liveScore.syncMissingDueDates();
       await this.liveScore.syncActiveMatchWindow();
     });
@@ -65,8 +59,10 @@ export class LiveScoreScheduler implements OnModuleInit {
     this.running = true;
     try {
       await task();
-    } catch {
-      // already logged in the service; swallow so the cron keeps ticking
+    } catch (err) {
+      this.logger.warn(
+        `${label} failed: ${err instanceof Error ? err.message : String(err)}`,
+      );
     } finally {
       this.running = false;
     }
