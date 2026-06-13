@@ -7,6 +7,8 @@ COPY services/worldcup/package.json services/worldcup/pnpm-lock.yaml ./
 RUN corepack enable && pnpm install --frozen-lockfile --prod=false
 
 COPY services/worldcup ./
+# FootballSage production overlay for live-score catch-up/backfill behavior.
+COPY apps/worldcup-api/overrides ./
 RUN pnpm build && pnpm prune --prod
 
 FROM node:24-alpine
